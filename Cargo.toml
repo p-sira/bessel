@@ -3,12 +3,17 @@ name = "bessel"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-license = "BSD-3-Clause AND MIT AND BSL-1.0"
+authors = ["Sira Pornsiriprasert <code@psira.me>"]
+documentation = "https://docs.rs/orthogonal"
+homepage = "https://github.com/p-sira/orthogonal"
+repository = "https://github.com/p-sira/orthogonal"
+license = "BSD-3-Clause"
+
 description = "Pure Rust cylindrical, spherical, Kelvin, Hankel and Struve functions"
 categories = ["mathematics", "science"]
 keywords = ["bessel", "hankel", "struve", "kelvin", "spherical"]
 readme = "README.md"
-include = ["/src/**", "/README.md", "/LICENSE", "/LICENSES/**"]
+include = ["/src/**", "/LICENSE", "/LICENSES/**"]
 
 [dependencies]
 num-traits = "0.2"
