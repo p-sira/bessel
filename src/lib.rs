@@ -1,9 +1,52 @@
 //! Cylindrical Bessel, Hankel, modified Bessel, spherical Bessel, Struve, and Kelvin functions.
 //!
-//! Functions take dimensionless arguments. The real scalar API returns IEEE NaN
-//! on invalid domains; the checked Kelvin and complex backends return errors.
-//! The numerical kernels evaluate in binary64, with f32 conversion supported
-//! for the spherical, Struve, Kelvin, and complex APIs.
+//! # Function families
+//!
+//! - **Cylindrical Bessel:** [`jv`], [`yv`], [`iv`], and [`kv`] evaluate J, Y, I,
+//!   and K for real order and argument. Integer-order and order-zero/one
+//!   shortcuts, scaled variants (`ive`, `kve`, etc.), and derivatives
+//!   ([`jvp`], [`yvp`], [`ivp`], [`kvp`]) are also available.
+//! - **Complex Bessel and Hankel:** [`complex`] evaluates J, Y, I, K, and both
+//!   Hankel functions with a complex argument, including scaled variants.
+//!   The root-level [`hankel1`] and [`hankel2`] accept real arguments, while
+//!   [`checked_complex`] exposes the generic complex Hankel kernels.
+//! - **Spherical Bessel:** [`spherical_jn`], [`spherical_yn`],
+//!   [`spherical_in`], and [`spherical_kn`] optionally calculate derivatives.
+//!   [`riccati_jn`] and [`riccati_yn`] return values and derivatives through
+//!   a requested order.
+//! - **Kelvin and Struve:** [`ber`], [`bei`], [`ker`], [`kei`], their derivatives
+//!   and zeros, [`struve`] and [`modstruve`], with fallible equivalents for
+//!   selected kernels in [`checked`].
+//! - **Additional functions:** Cylindrical Bessel zeros ([`jn_zeros`],
+//!   [`jnyn_zeros`], [`jnjnp_zeros`]), modified Bessel ratios ([`iv_ratio`],
+//!   [`iv_ratio_c`], [`iv_ratioinv`]), integral families ([`itj0y0`],
+//!   [`it2i0k0`], [`itstruve0`]), [`besselpoly`], and the Airy quartet ([`airy`],
+//!   [`airye`]).
+//!
+//! # Domains and numerical behavior
+//!
+//! Arguments, orders, and normalizations are dimensionless. Real J and I
+//! require integer order for negative real arguments; real Y and K generally
+//! require positive arguments, with singular limits at zero. For invalid
+//! domains, infallible real functions return IEEE NaN; some singular limits
+//! return infinity. The [`checked`], [`checked_complex`], and [`complex`]
+//! interfaces return errors for their respective fallible operations, including
+//! invalid inputs, failure to converge, and overflow where supported.
+//!
+//! Numerical kernels use binary64 arithmetic. Some generic interfaces accept
+//! `f32` and convert through `f64`; complex arguments in [`complex`] use
+//! [`Complex64`]. All iterations have finite limits, but relative accuracy
+//! can deteriorate near zeros, branch cuts, turning points, and derivatives
+//! with severe cancellation. The real derivatives support orders up to 1024;
+//! spherical functions support integer orders from 0 through 4096. Individual
+//! functions document other domain and count restrictions.
+//!
+//! This standalone library was extracted from the Bessel namespace in
+//! [Sci](https://github.com/p-sira/sci). The functions cover its original 79
+//! names, with some signature differences. For example, [`kelvin_zeros`]
+//! selects a single Kelvin zero sequence via [`KelvinFunction`] instead of
+//! returning eight parallel sequences. Exact SciPy signature parity is not
+//! intended.
 //!
 //! # Mathematical conventions
 //!
@@ -15,9 +58,12 @@
 //! - Kelvin functions are the real and imaginary components of
 //!   `J_0(x exp(3πi/4))` and `K_0(x exp(πi/4))`.
 //!
-//! The defining formulas, principal branches and analytic continuation appear
-//! in [NIST DLMF 10](https://dlmf.nist.gov/10) and
-//! [NIST DLMF 11](https://dlmf.nist.gov/11).
+//! Complex functions follow the AMOS principal branches. For defining formulas,
+//! principal branches, and analytic continuation, see
+//! [NIST DLMF Chapter 10](https://dlmf.nist.gov/10) and
+//! [NIST DLMF Chapter 11](https://dlmf.nist.gov/11). For the modified Bessel
+//! ratios, see Gautschi and Slavik (1978). Numerical validation uses independent
+//! SciPy references and high-precision checks at extreme arguments.
 //!
 //! # Example
 //!
@@ -138,7 +184,11 @@ pub fn kelvin(x: f64) -> [Complex64; 4] {
         .unwrap_or([nan; 4])
 }
 /// Fill the requested positive zero sequence of a Kelvin function.
-/// Uses a bounded bracket and Halley refinement.
+///
+/// Unlike Sci's `kelvin_zeros(nt)`, which returns all eight sequences, this
+/// function selects one sequence with [`KelvinFunction`]. The individual
+/// `ber_zeros`, `bei_zeros`, etc. functions are also available.
+/// Uses a bounded bracket and Halley refinement; `nt` must be at most 256.
 pub fn kelvin_zeros(function: KelvinFunction, nt: usize) -> Result<Vec<f64>, &'static str> {
     if nt > 256 {
         return Err("Kelvin zero count exceeds 256");
@@ -587,6 +637,9 @@ pub fn iti0k0(x: f64) -> (f64, f64) {
     paired_integral(x, backend::integrals::itika, true)
 }
 /// Integrals `(∫₀ˣ (I₀(t)-1)/t dt, ∫ₓ^∞ K₀(t)/t dt)` for x > 0.
+///
+/// For x ≥ 4, evaluates the exponentially decaying K₀ tail with a scaled
+/// kernel to avoid loss of accuracy in the original specfun approximation.
 pub fn it2i0k0(x: f64) -> (f64, f64) {
     if x.is_finite() && x >= 4.0 {
         backend::integrals::it2i0k0_corrected(x)
