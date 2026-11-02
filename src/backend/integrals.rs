@@ -913,13 +913,48 @@ fn quadrature(left: f64, right: f64, evaluate: impl Fn(f64) -> f64) -> f64 {
     }
     total
 }
-/// Integrated H0 series for small x, Gaussian quadrature for moderate x.
-/// For x>512 a validated asymptotic is needed; return NaN.
+/// Large-x expansion of the integrated Struve H0 function.
+///
+/// H0 = Y0 + K0 (Struve K0 in DLMF notation). DLMF 11.6.3 gives the
+/// logarithm and inverse even powers from the integral of K0; the remaining
+/// oscillatory part is -integral_x^inf Y0(t) dt. Termwise integration of the
+/// Hankel expansion of Y0 (DLMF 10.17.4) gives the cosine and sine polynomials.
+/// With x >= 512, the first omitted terms are smaller than binary64 rounding.
+fn itstruve0_asymptotic(x: f64) -> f64 {
+    const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
+    let inverse = 1.0 / x;
+    let z = inverse * inverse;
+    let algebraic = z * (0.5 + z * (-2.25 + z * 37.5));
+
+    // Construct x - pi/4 from sin(x), cos(x): subtracting pi/4 from a huge
+    // floating-point x would discard the phase and corrupt the oscillation.
+    let (sin_x, cos_x) = x.sin_cos();
+    let phase_cos = (cos_x + sin_x) * std::f64::consts::FRAC_1_SQRT_2;
+    let phase_sin = (sin_x - cos_x) * std::f64::consts::FRAC_1_SQRT_2;
+    let cosine_polynomial =
+        1.0 + z * (-129.0 / 128.0 + z * (301_035.0 / 32_768.0 - z * 961_319_205.0 / 4_194_304.0));
+    let sine_polynomial =
+        inverse * (5.0 / 8.0 + z * (-2_655.0 / 1_024.0 + z * 10_896_795.0 / 262_144.0));
+    let y0_tail =
+        ((2.0 / PI) / x).sqrt() * (phase_cos * cosine_polynomial + phase_sin * sine_polynomial);
+
+    // ln(x)+ln(2) avoids overflow in ln(2*x) near f64::MAX.
+    (2.0 / PI) * (x.ln() + std::f64::consts::LN_2 + EULER_GAMMA + algebraic) - y0_tail
+}
+
+/// Integrated H0 series for small x, Gaussian quadrature for moderate x,
+/// and a DLMF asymptotic for large arguments.
 pub(crate) fn itstruve0_corrected(x: f64) -> f64 {
-    if !x.is_finite() || x.abs() > 512.0 {
+    if x.is_nan() {
         return f64::NAN;
     }
+    if x.is_infinite() {
+        return f64::INFINITY;
+    }
     let x = x.abs();
+    if x > 512.0 {
+        return itstruve0_asymptotic(x);
+    }
     if x <= 10.0 {
         let square = x * x;
         let (mut term, mut sum) = (1.0, 1.0);

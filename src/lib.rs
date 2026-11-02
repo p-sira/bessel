@@ -594,13 +594,39 @@ pub fn it2i0k0(x: f64) -> (f64, f64) {
         paired_integral(x, backend::integrals::ittika, false)
     }
 }
-/// Integral `∫₀ˣ H₀(t) dt`, even in x; H₀ is the Struve function.
+/// Integral of the Struve function H₀ from zero to `x`.
+///
+/// # Definition and conventions
+///
+/// Returns `∫₀ˣ H₀(t) dt`. Since H₀ is odd, its integral is even in `x`.
+/// The argument and the result are dimensionless, with real Struve H₀.
+///
+/// # Domain and special values
+///
+/// All finite real arguments are supported; `itstruve0(±0.0) = +0.0`.
+/// Either infinity returns positive infinity (logarithmic growth), and NaN
+/// propagates. This infallible function has no separate error result.
+///
+/// # Numerical behavior
+///
+/// Uses a convergent series for `|x| <= 10`, quadrature for `10 < |x| <= 512`,
+/// then an asymptotic expansion including the oscillatory Y₀ tail. The large
+/// argument branch avoids intermediate overflow and phase loss in `x - π/4`.
+///
+/// # Example
+///
+/// ```
+/// assert_eq!(bessel::itstruve0(0.0), 0.0);
+/// assert_eq!(bessel::itstruve0(-600.0), bessel::itstruve0(600.0));
+/// assert!(bessel::itstruve0(1.0e308).is_finite());
+/// ```
+///
+/// # References
+///
+/// [DLMF 11.6.3](https://dlmf.nist.gov/11.6.E3) and
+/// [DLMF 10.17.4](https://dlmf.nist.gov/10.17.E4).
 pub fn itstruve0(x: f64) -> f64 {
-    if !x.is_finite() {
-        f64::NAN
-    } else {
-        backend::integrals::itstruve0_corrected(x)
-    }
+    backend::integrals::itstruve0_corrected(x)
 }
 /// Integral `∫ₓ^∞ H₀(t)/t dt` for x ≥ 0.
 pub fn it2struve0(x: f64) -> f64 {
