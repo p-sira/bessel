@@ -27,4 +27,4 @@ assert!((spherical_jn(0, 1.0_f64, false) - 1.0_f64.sin()).abs() < 1e-14);
 assert!((hankel1(0.0, 1.0) - Complex64::new(bessel::j0(1.0), bessel::y0(1.0))).norm() < 1e-13);
 ```
 
-Real-valued functions return `NaN` for invalid inputs; the `checked`, `checked_complex`, and `complex` modules expose fallible alternatives for their respective functions.
+Real-valued scalar functions support `f32` and `f64` through `num_traits::Float` (evaluated internally in `f64`). They return `NaN` for invalid inputs; the `checked`, `checked_complex`, and `complex` modules expose fallible alternatives for their respective functions. The `kelvin_zeros(nt)` API returns all eight zero sequences; `kelvin_zeros_for(family, nt)` selects one family. See [test fixture generation](tests/scipy/README.md) for numerical validation and reproducibility.
