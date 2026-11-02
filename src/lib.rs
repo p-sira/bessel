@@ -2,8 +2,8 @@
 //!
 //! Functions take dimensionless arguments. The real scalar API returns IEEE NaN
 //! on invalid domains; the checked Kelvin and complex backends return errors.
-//! The numerical kernels evaluate in binary64, with f32 conversion supported
-//! for the spherical, Struve, Kelvin, and complex APIs.
+//! The numerical kernels evaluate in binary64, with generic f32/f64 inputs
+//! for scalar Bessel, spherical, Struve, Kelvin, and checked complex APIs.
 //!
 //! # Mathematical conventions
 //!
@@ -23,9 +23,9 @@
 //!
 //! ```
 //! use bessel::{j0, jv, iv, spherical_jn};
-//! assert!((j0(0.0) - 1.0).abs() < 1e-14);
-//! assert!((jv(0.0, 1.0) - j0(1.0)).abs() < 1e-14);
-//! assert!((iv(0.0, 0.0) - 1.0).abs() < 1e-14);
+//! assert!((j0(0.0_f64) - 1.0).abs() < 1e-14);
+//! assert!((jv(0.0_f64, 1.0) - j0(1.0_f64)).abs() < 1e-14);
+//! assert!((iv(0.0_f64, 0.0) - 1.0).abs() < 1e-14);
 //! assert!((spherical_jn(0,1.0_f64,false) - 1.0_f64.sin()).abs() < 1e-14);
 //! ```
 #![forbid(unsafe_code)]
@@ -33,18 +33,48 @@ mod backend;
 pub use backend::bessel::Airy;
 pub use backend::kelvin::{Kelvin, KelvinFunction};
 pub use num_complex::{Complex, Complex64};
+
+/// A validation or numerical evaluation failure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Error {
+    /// A parameter or sequence size violates its documented domain.
+    InvalidInput(&'static str),
+    /// The numerical algorithm failed to converge or evaluate.
+    NumericalFailure(&'static str),
+    /// The result cannot be represented as a finite number.
+    NonFiniteEvaluation,
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidInput(message) | Self::NumericalFailure(message) => f.write_str(message),
+            Self::NonFiniteEvaluation => f.write_str("evaluation returned a nonfinite value"),
+        }
+    }
+}
+impl std::error::Error for Error {}
+/// A checked numerical result.
+pub type Result<T> = std::result::Result<T, Error>;
 /// Checked complex Hankel functions with generic real order and complex argument.
 pub mod checked_complex {
     pub use crate::backend::bessel::{cyl_hankel_1, cyl_hankel_1e, cyl_hankel_2, cyl_hankel_2e};
 }
 /// The Airy quartet (Ai, Ai′, Bi, Bi′) evaluated using Bessel-related
 /// Cephes/AMOS kernels, included for users of the large-order uniform expansions.
-pub fn airy<T: num_traits::Float>(x: T) -> Result<Airy<T>, &'static str> {
-    backend::bessel::airy_real(x, false)
+pub fn airy<T: num_traits::Float>(x: T) -> Result<Airy<T>> {
+    if !x.is_finite() {
+        return Err(Error::InvalidInput("airy requires a finite argument"));
+    }
+    backend::bessel::airy_real(x, false).map_err(Error::NumericalFailure)
 }
 /// Scaled Airy quartet (Ai, Ai′, Bi, Bi′). For real x, requires x>=0.
-pub fn airye<T: num_traits::Float>(x: T) -> Result<Airy<T>, &'static str> {
-    backend::bessel::airy_real(x, true)
+pub fn airye<T: num_traits::Float>(x: T) -> Result<Airy<T>> {
+    if !x.is_finite() || x < T::zero() {
+        return Err(Error::InvalidInput(
+            "airye requires a finite nonnegative argument",
+        ));
+    }
+    backend::bessel::airy_real(x, true).map_err(Error::NumericalFailure)
 }
 /// Checked Kelvin component and zero-finder functions.
 pub mod checked {
@@ -60,7 +90,17 @@ macro_rules! scalar {
         pub fn $name($($arg: $ty),*) -> f64 { $body }
     )+};
 }
-scalar! {
+macro_rules! generic_scalar {
+    ($($(#[$meta:meta])* $name:ident($($arg:ident: f64),*) => $body:expr;)+) => {$(
+        $(#[$meta])*
+        #[inline]
+        pub fn $name<T: num_traits::Float>($($arg: T),*) -> T {
+            $(let $arg = $arg.to_f64().unwrap_or(f64::NAN);)*
+            T::from($body).unwrap_or(T::nan())
+        }
+    )+};
+}
+generic_scalar! {
     /// First-kind Bessel J₀(x), for all finite real x.
     j0(x:f64) => backend::cephes64::j0(x);
     /// First-kind Bessel J₁(x), odd in x.
@@ -97,12 +137,6 @@ scalar! {
     k0e(x:f64) => backend::cephes64::k0e(x);
     /// Scaled K₁(x): exp(x) K₁(x), x≥0.
     k1e(x:f64) => backend::cephes64::k1e(x);
-    /// Bessel J of integer order n.
-    jn(n:i32,x:f64) => jv(n as f64,x);
-    /// Bessel Y of integer order n.
-    yn(n:i32,x:f64) => yv(n as f64,x);
-    /// Modified Bessel K of integer order n.
-    kn(n:i32,x:f64) => kv(n as f64,x);
     /// Scaled first-kind cylindrical Bessel Jν(x), identical on the real axis.
     jve(v:f64,x:f64) => jv(v,x);
     /// Scaled second-kind cylindrical Bessel Yν(x), identical on the real axis.
@@ -128,6 +162,14 @@ scalar! {
     /// Derivative kei′(x).
     keip(x:f64) => backend::kelvin::keip(x).unwrap_or(f64::NAN);
 }
+scalar! {
+    /// Bessel J of integer order n.
+    jn(n:i32,x:f64) => jv(n as f64,x);
+    /// Bessel Y of integer order n.
+    yn(n:i32,x:f64) => yv(n as f64,x);
+    /// Modified Bessel K of integer order n.
+    kn(n:i32,x:f64) => kv(n as f64,x);
+}
 /// All Kelvin values and derivatives, in the order
 /// `ber+i bei, ker+i kei, berp+i beip, kerp+i keip`.
 /// Returns NaN components on a backend evaluation failure.
@@ -137,101 +179,173 @@ pub fn kelvin(x: f64) -> [Complex64; 4] {
         .map(|(a, b, c, d)| [a, b, c, d])
         .unwrap_or([nan; 4])
 }
-/// Fill the requested positive zero sequence of a Kelvin function.
-/// Uses a bounded bracket and Halley refinement.
-pub fn kelvin_zeros(function: KelvinFunction, nt: usize) -> Result<Vec<f64>, &'static str> {
-    if nt > 256 {
-        return Err("Kelvin zero count exceeds 256");
+/// Return the first `nt` positive zeros of one Kelvin family.
+///
+/// `function` selects one of the eight real Kelvin functions and derivatives.
+/// The supported domain is `1..=4096` zeros. Evaluations use scaled kernels
+/// with bounded bracketing and safeguarded Halley refinement.
+///
+/// # Errors
+///
+/// [`Error::InvalidInput`] for an empty or excessive count;
+/// [`Error::NumericalFailure`] when the solver cannot find a requested root.
+///
+/// # Example
+///
+/// ```
+/// let roots = bessel::kelvin_zeros_for(bessel::KelvinFunction::Ber, 2)?;
+/// assert!(roots[0] > 0.0 && roots[1] > roots[0]);
+/// # Ok::<(), bessel::Error>(())
+/// ```
+pub fn kelvin_zeros_for(function: KelvinFunction, nt: usize) -> Result<Vec<f64>> {
+    if !(1..=4096).contains(&nt) {
+        return Err(Error::InvalidInput("Kelvin zero count must be in 1..=4096"));
     }
     let mut zeros = vec![0.0; nt];
-    backend::kelvin::kelvin_zeros(function, &mut zeros)?;
+    backend::kelvin::kelvin_zeros(function, &mut zeros).map_err(Error::NumericalFailure)?;
     Ok(zeros)
 }
+
+/// First `nt` positive zeros of ber, bei, ker, kei, ber′, bei′, ker′, kei′.
+///
+/// Returns eight vectors of equal length in the order listed above.
+/// `nt` must lie in `1..=4096`; an invalid count or a numerical failure
+/// returns [`Error`]. See [`kelvin_zeros_for`] for the per-family solver.
+///
+/// # Example
+///
+/// ```
+/// let roots = bessel::kelvin_zeros(2)?;
+/// assert_eq!(roots.len(), 8);
+/// assert!(roots.iter().all(|family| family.len() == 2));
+/// # Ok::<(), bessel::Error>(())
+/// ```
+pub fn kelvin_zeros(nt: usize) -> Result<[Vec<f64>; 8]> {
+    Ok([
+        ber_zeros(nt)?,
+        bei_zeros(nt)?,
+        ker_zeros(nt)?,
+        kei_zeros(nt)?,
+        berp_zeros(nt)?,
+        beip_zeros(nt)?,
+        kerp_zeros(nt)?,
+        keip_zeros(nt)?,
+    ])
+}
 /// First positive roots of ber(x).
-pub fn ber_zeros(nt: usize) -> Result<Vec<f64>, &'static str> {
-    kelvin_zeros(KelvinFunction::Ber, nt)
+pub fn ber_zeros(nt: usize) -> Result<Vec<f64>> {
+    kelvin_zeros_for(KelvinFunction::Ber, nt)
 }
 /// First positive roots of bei(x).
-pub fn bei_zeros(nt: usize) -> Result<Vec<f64>, &'static str> {
-    kelvin_zeros(KelvinFunction::Bei, nt)
+pub fn bei_zeros(nt: usize) -> Result<Vec<f64>> {
+    kelvin_zeros_for(KelvinFunction::Bei, nt)
 }
 /// First positive roots of ker(x).
-pub fn ker_zeros(nt: usize) -> Result<Vec<f64>, &'static str> {
-    kelvin_zeros(KelvinFunction::Ker, nt)
+pub fn ker_zeros(nt: usize) -> Result<Vec<f64>> {
+    kelvin_zeros_for(KelvinFunction::Ker, nt)
 }
 /// First positive roots of kei(x).
-pub fn kei_zeros(nt: usize) -> Result<Vec<f64>, &'static str> {
-    kelvin_zeros(KelvinFunction::Kei, nt)
+pub fn kei_zeros(nt: usize) -> Result<Vec<f64>> {
+    kelvin_zeros_for(KelvinFunction::Kei, nt)
 }
 /// First positive roots of ber′(x).
-pub fn berp_zeros(nt: usize) -> Result<Vec<f64>, &'static str> {
-    kelvin_zeros(KelvinFunction::BerPrime, nt)
+pub fn berp_zeros(nt: usize) -> Result<Vec<f64>> {
+    kelvin_zeros_for(KelvinFunction::BerPrime, nt)
 }
 /// First positive roots of bei′(x).
-pub fn beip_zeros(nt: usize) -> Result<Vec<f64>, &'static str> {
-    kelvin_zeros(KelvinFunction::BeiPrime, nt)
+pub fn beip_zeros(nt: usize) -> Result<Vec<f64>> {
+    kelvin_zeros_for(KelvinFunction::BeiPrime, nt)
 }
 /// First positive roots of ker′(x).
-pub fn kerp_zeros(nt: usize) -> Result<Vec<f64>, &'static str> {
-    kelvin_zeros(KelvinFunction::KerPrime, nt)
+pub fn kerp_zeros(nt: usize) -> Result<Vec<f64>> {
+    kelvin_zeros_for(KelvinFunction::KerPrime, nt)
 }
 /// First positive roots of kei′(x).
-pub fn keip_zeros(nt: usize) -> Result<Vec<f64>, &'static str> {
-    kelvin_zeros(KelvinFunction::KeiPrime, nt)
+pub fn keip_zeros(nt: usize) -> Result<Vec<f64>> {
+    kelvin_zeros_for(KelvinFunction::KeiPrime, nt)
 }
 
-/// Complex cylindrical Bessel and Hankel functions with a real order and a
-/// general complex argument. Branch cuts follow the AMOS principal branches.
+/// Checked complex cylindrical Bessel and Hankel functions with real order.
+///
+/// Signed imaginary zero selects the upper or lower rim of the negative-real
+/// branch cut. All kernels evaluate internally in binary64 and convert to the
+/// caller's floating-point type. Invalid, overflowing, and unconverged
+/// evaluations return the shared [`Error`] type.
 pub mod complex {
-    use crate::Complex64;
-    use complex_bessel::{self as cb, Error};
-    /// Jν(z).
-    pub fn jv(v: f64, z: Complex64) -> Result<Complex64, Error> {
-        cb::besselj(v, z)
+    use crate::{Complex, Complex64, Error, Result};
+    use num_traits::Float;
+
+    type Kernel = fn(f64, Complex64) -> std::result::Result<Complex64, complex_bessel::Error>;
+
+    fn evaluate<T: Float>(v: T, z: Complex<T>, upper: Kernel, lower: Kernel) -> Result<Complex<T>> {
+        if !v.is_finite() || !z.re.is_finite() || !z.im.is_finite() {
+            return Err(Error::InvalidInput(
+                "Bessel order and argument must be finite",
+            ));
+        }
+        let v = v.to_f64().ok_or(Error::NonFiniteEvaluation)?;
+        let mut z = Complex64::new(
+            z.re.to_f64().ok_or(Error::NonFiniteEvaluation)?,
+            z.im.to_f64().ok_or(Error::NonFiniteEvaluation)?,
+        );
+        let on_lower_rim = z.re < 0.0 && z.im == 0.0 && z.im.is_sign_negative();
+        let kernel = if on_lower_rim {
+            // AMOS identifies both zero signs as the upper bank. Schwarz
+            // reflection conjugates the upper value of the reflected kernel.
+            z.im = 0.0;
+            lower
+        } else {
+            upper
+        };
+        let result = kernel(v, z).map_err(|error| {
+            Error::NumericalFailure(crate::backend::bessel::backend_error(error))
+        })?;
+        let result = if on_lower_rim { result.conj() } else { result };
+        if !result.re.is_finite() || !result.im.is_finite() {
+            return Err(Error::NonFiniteEvaluation);
+        }
+        let re = T::from(result.re).ok_or(Error::NonFiniteEvaluation)?;
+        let im = T::from(result.im).ok_or(Error::NonFiniteEvaluation)?;
+        if !re.is_finite() || !im.is_finite() {
+            return Err(Error::NonFiniteEvaluation);
+        }
+        Ok(Complex::new(re, im))
     }
-    /// Yν(z).
-    pub fn yv(v: f64, z: Complex64) -> Result<Complex64, Error> {
-        cb::bessely(v, z)
+
+    macro_rules! bessel_complex {
+        ($($(#[$meta:meta])* $name:ident, $upper:ident, $lower:ident;)+) => {$(
+            $(#[$meta])*
+            pub fn $name<T: Float>(v: T, z: Complex<T>) -> Result<Complex<T>> {
+                evaluate(v, z, complex_bessel::$upper, complex_bessel::$lower)
+            }
+        )+};
     }
-    /// Iν(z).
-    pub fn iv(v: f64, z: Complex64) -> Result<Complex64, Error> {
-        cb::besseli(v, z)
-    }
-    /// Kν(z).
-    pub fn kv(v: f64, z: Complex64) -> Result<Complex64, Error> {
-        cb::besselk(v, z)
-    }
-    /// Scaled Jν(z), exp(-|Im z|) Jν(z).
-    pub fn jve(v: f64, z: Complex64) -> Result<Complex64, Error> {
-        cb::besselj_scaled(v, z)
-    }
-    /// Scaled Yν(z), exp(-|Im z|) Yν(z).
-    pub fn yve(v: f64, z: Complex64) -> Result<Complex64, Error> {
-        cb::bessely_scaled(v, z)
-    }
-    /// Scaled Iν(z), exp(-|Re z|) Iν(z).
-    pub fn ive(v: f64, z: Complex64) -> Result<Complex64, Error> {
-        cb::besseli_scaled(v, z)
-    }
-    /// Scaled Kν(z), exp(z) Kν(z).
-    pub fn kve(v: f64, z: Complex64) -> Result<Complex64, Error> {
-        cb::besselk_scaled(v, z)
-    }
-    /// Hankel Hν¹(z).
-    pub fn hankel1(v: f64, z: Complex64) -> Result<Complex64, Error> {
-        cb::hankel1(v, z)
-    }
-    /// Hankel Hν²(z).
-    pub fn hankel2(v: f64, z: Complex64) -> Result<Complex64, Error> {
-        cb::hankel2(v, z)
-    }
-    /// Scaled Hν¹(z) = exp(-iz) Hν¹(z).
-    pub fn hankel1e(v: f64, z: Complex64) -> Result<Complex64, Error> {
-        cb::hankel1_scaled(v, z)
-    }
-    /// Scaled Hν²(z) = exp(iz) Hν²(z).
-    pub fn hankel2e(v: f64, z: Complex64) -> Result<Complex64, Error> {
-        cb::hankel2_scaled(v, z)
+
+    bessel_complex! {
+        /// Jν(z) on the principal branch.
+        jv, besselj, besselj;
+        /// Yν(z) on the principal branch.
+        yv, bessely, bessely;
+        /// Iν(z) on the principal branch.
+        iv, besseli, besseli;
+        /// Kν(z) on the principal branch.
+        kv, besselk, besselk;
+        /// Scaled Jν(z), exp(-|Im z|) Jν(z).
+        jve, besselj_scaled, besselj_scaled;
+        /// Scaled Yν(z), exp(-|Im z|) Yν(z).
+        yve, bessely_scaled, bessely_scaled;
+        /// Scaled Iν(z), exp(-|Re z|) Iν(z).
+        ive, besseli_scaled, besseli_scaled;
+        /// Scaled Kν(z), exp(z) Kν(z).
+        kve, besselk_scaled, besselk_scaled;
+        /// Hankel Hν¹(z).
+        hankel1, hankel1, hankel2;
+        /// Hankel Hν²(z).
+        hankel2, hankel2, hankel1;
+        /// Scaled Hν¹(z) = exp(-iz) Hν¹(z).
+        hankel1e, hankel1_scaled, hankel2_scaled;
+        /// Scaled Hν²(z) = exp(iz) Hν²(z).
+        hankel2e, hankel2_scaled, hankel1_scaled;
     }
 }
 /// First-kind Hankel Hν¹(x), on the upper rim of the negative real cut.
@@ -312,16 +426,18 @@ spherical! {
     spherical_kn(sph_bessel_k,sph_bessel_k_jac);
 }
 /// Riccati-Bessel functions x*j_n(x), and their first derivatives, through n.
-pub fn riccati_jn(n: usize, x: f64) -> Result<(Vec<f64>, Vec<f64>), &'static str> {
+pub fn riccati_jn(n: usize, x: f64) -> Result<(Vec<f64>, Vec<f64>)> {
     riccati(n, x, true)
 }
 /// Riccati-Bessel functions x*y_n(x), and their first derivatives, through n.
-pub fn riccati_yn(n: usize, x: f64) -> Result<(Vec<f64>, Vec<f64>), &'static str> {
+pub fn riccati_yn(n: usize, x: f64) -> Result<(Vec<f64>, Vec<f64>)> {
     riccati(n, x, false)
 }
-fn riccati(n: usize, x: f64, first: bool) -> Result<(Vec<f64>, Vec<f64>), &'static str> {
+fn riccati(n: usize, x: f64, first: bool) -> Result<(Vec<f64>, Vec<f64>)> {
     if n > 4096 || !x.is_finite() || x <= 0.0 {
-        return Err("Riccati requires positive finite x and n<=4096");
+        return Err(Error::InvalidInput(
+            "Riccati requires positive finite x and n<=4096",
+        ));
     }
     Ok((0..=n)
         .map(|i| {
@@ -339,9 +455,11 @@ enum RootKind {
     Y,
     YPrime,
 }
-fn bessel_roots(n: u32, nt: usize, kind: RootKind) -> Result<Vec<f64>, &'static str> {
+fn bessel_roots(n: u32, nt: usize, kind: RootKind) -> Result<Vec<f64>> {
     if n > 256 || !(1..=256).contains(&nt) {
-        return Err("Bessel roots require n<=256 and count in 1..=256");
+        return Err(Error::InvalidInput(
+            "Bessel roots require n<=256 and count in 1..=256",
+        ));
     }
     let v = f64::from(n);
     let f = |x: f64| match kind {
@@ -367,7 +485,7 @@ fn bessel_roots(n: u32, nt: usize, kind: RootKind) -> Result<Vec<f64>, &'static 
                 let mid = low + (high - low) * 0.5;
                 let fm = f(mid);
                 if !fm.is_finite() {
-                    return Err("nonfinite Bessel root residual");
+                    return Err(Error::NonFiniteEvaluation);
                 }
                 if fm == 0.0 || high - low <= 4.0 * f64::EPSILON * mid.max(1.0) {
                     low = mid;
@@ -389,26 +507,28 @@ fn bessel_roots(n: u32, nt: usize, kind: RootKind) -> Result<Vec<f64>, &'static 
         a = b;
         fa = fb;
     }
-    Err("unable to bracket requested Bessel roots")
+    Err(Error::NumericalFailure(
+        "unable to bracket requested Bessel roots",
+    ))
 }
 /// First positive zeros of cylindrical Jₙ(x).
-pub fn jn_zeros(n: u32, nt: usize) -> Result<Vec<f64>, &'static str> {
+pub fn jn_zeros(n: u32, nt: usize) -> Result<Vec<f64>> {
     bessel_roots(n, nt, RootKind::J)
 }
 /// First positive zeros of Jₙ′(x).
-pub fn jnp_zeros(n: u32, nt: usize) -> Result<Vec<f64>, &'static str> {
+pub fn jnp_zeros(n: u32, nt: usize) -> Result<Vec<f64>> {
     bessel_roots(n, nt, RootKind::JPrime)
 }
 /// First positive zeros of cylindrical Yₙ(x).
-pub fn yn_zeros(n: u32, nt: usize) -> Result<Vec<f64>, &'static str> {
+pub fn yn_zeros(n: u32, nt: usize) -> Result<Vec<f64>> {
     bessel_roots(n, nt, RootKind::Y)
 }
 /// First positive zeros of Yₙ′(x).
-pub fn ynp_zeros(n: u32, nt: usize) -> Result<Vec<f64>, &'static str> {
+pub fn ynp_zeros(n: u32, nt: usize) -> Result<Vec<f64>> {
     bessel_roots(n, nt, RootKind::YPrime)
 }
 /// All four real zero sequences in the order Jₙ, Jₙ′, Yₙ, Yₙ′.
-pub fn jnyn_zeros(n: u32, nt: usize) -> Result<[Vec<f64>; 4], &'static str> {
+pub fn jnyn_zeros(n: u32, nt: usize) -> Result<[Vec<f64>; 4]> {
     Ok([
         jn_zeros(n, nt)?,
         jnp_zeros(n, nt)?,
@@ -417,19 +537,19 @@ pub fn jnyn_zeros(n: u32, nt: usize) -> Result<[Vec<f64>; 4], &'static str> {
     ])
 }
 /// Positive real Y₀ zeros and corresponding Y₁ values.
-pub fn y0_zeros(nt: usize) -> Result<(Vec<f64>, Vec<f64>), &'static str> {
+pub fn y0_zeros(nt: usize) -> Result<(Vec<f64>, Vec<f64>)> {
     let roots = yn_zeros(0, nt)?;
     let values = roots.iter().map(|&x| y1(x)).collect();
     Ok((roots, values))
 }
 /// Positive real Y₁ zeros and corresponding Y₁ derivatives.
-pub fn y1_zeros(nt: usize) -> Result<(Vec<f64>, Vec<f64>), &'static str> {
+pub fn y1_zeros(nt: usize) -> Result<(Vec<f64>, Vec<f64>)> {
     let roots = yn_zeros(1, nt)?;
     let values = roots.iter().map(|&x| yvp(1.0, x, 1)).collect();
     Ok((roots, values))
 }
 /// Positive real Y₁′ zeros and corresponding Y₁ values.
-pub fn y1p_zeros(nt: usize) -> Result<(Vec<f64>, Vec<f64>), &'static str> {
+pub fn y1p_zeros(nt: usize) -> Result<(Vec<f64>, Vec<f64>)> {
     let roots = ynp_zeros(1, nt)?;
     let values = roots.iter().map(|&x| y1(x)).collect();
     Ok((roots, values))
@@ -438,9 +558,9 @@ pub fn y1p_zeros(nt: usize) -> Result<(Vec<f64>, Vec<f64>), &'static str> {
 ///
 /// Returns parallel vectors `[root, order, root_index, derivative_flag]`;
 /// the J₀′ root at zero is included.
-pub fn jnjnp_zeros(nt: usize) -> Result<[Vec<f64>; 4], &'static str> {
+pub fn jnjnp_zeros(nt: usize) -> Result<[Vec<f64>; 4]> {
     if !(1..=128).contains(&nt) {
-        return Err("merged root count must be in 1..=128");
+        return Err(Error::InvalidInput("merged root count must be in 1..=128"));
     }
     let mut entries: Vec<(f64, f64, f64, f64)> = vec![(0.0, 0.0, 0.0, 1.0)];
     let cutoff = ((nt as f64) * 8.0).sqrt() + 4.0;
