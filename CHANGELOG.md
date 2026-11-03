@@ -2,7 +2,7 @@
 
 ## 0.1
 
-### 0.1.1 (unreleased)
+### 0.1.1
 
 **Performance Improvements**
 - `itstruve0`: Restore the moderate-large-argument Chebyshev/Clenshaw fast path to avoid expensive quadrature ([#4](https://github.com/p-sira/bessel/pull/4)).
