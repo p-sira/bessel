@@ -14,6 +14,118 @@ fn log_cosh(y: f64) -> f64 {
     a + (-2.0 * a).exp().ln_1p() - core::f64::consts::LN_2
 }
 
+// Real K for a reduced order |u| <= 1/2. Temme's power series and Steed's
+// CF2 are adapted from the Sci-special Cephes I_v implementation, in turn
+// based on SciPy's XSF cephes/scipy_iv.h. Both return exp(x) K_u and
+// exp(x) K_(u+1); stable upward recurrence then reaches the requested order.
+// If either iteration fails, the quadrature below remains the fallback.
+fn temme_k(u: f64, x: f64) -> Option<(f64, f64)> {
+    const EPS: f64 = f64::EPSILON;
+    let gp = super::cephes64::gamma(1.0 + u) - 1.0;
+    let gm = super::cephes64::gamma(1.0 - u) - 1.0;
+    let a = (0.5 * x).ln();
+    let b = (u * a).exp();
+    let sigma = -a * u;
+    let c = if u.abs() < EPS {
+        1.0
+    } else {
+        (core::f64::consts::PI * u).sin() / (u * core::f64::consts::PI)
+    };
+    let d = if sigma.abs() < EPS {
+        1.0
+    } else {
+        sigma.sinh() / sigma
+    };
+    let gamma1 = if u.abs() < EPS {
+        -0.577_215_664_901_532_9
+    } else {
+        0.5 * (gp - gm) * c / u
+    };
+    let gamma2 = 0.5 * (2.0 + gp + gm) * c;
+    let mut p = (1.0 + gp) / (2.0 * b);
+    let mut q = (1.0 + gm) * b * 0.5;
+    let mut f = (sigma.cosh() * gamma1 - d * a * gamma2) / c;
+    let mut coefficient = 1.0;
+    let mut sum = f;
+    let mut sum1 = p;
+    for k in 1..1000 {
+        let k = k as f64;
+        f = (k * f + p + q) / (k * k - u * u);
+        p /= k - u;
+        q /= k + u;
+        let h = p - k * f;
+        coefficient *= x * x / (4.0 * k);
+        sum += coefficient * f;
+        sum1 += coefficient * h;
+        if (coefficient * f).abs() < sum.abs() * EPS {
+            let ex = x.exp();
+            return Some((sum * ex, 2.0 * sum1 / x * ex));
+        }
+    }
+    None
+}
+
+fn cf2_k(u: f64, x: f64) -> Option<(f64, f64)> {
+    let mut a = u * u - 0.25;
+    let mut b = 2.0 * (x + 1.0);
+    let mut d = b.recip();
+    let mut f = d;
+    let mut delta = d;
+    let mut previous = 0.0;
+    let mut current = 1.0;
+    let mut c = -a;
+    let mut q_sum = c;
+    let mut sum = 1.0 + q_sum * delta;
+    let mut k = 1.0;
+    for _ in 2..1000 {
+        a -= 2.0 * k;
+        k += 1.0;
+        b += 2.0;
+        d = (b + a * d).recip();
+        delta *= b * d - 1.0;
+        f += delta;
+        let q = (previous - (b - 2.0) * current) / a;
+        previous = current;
+        current = q;
+        c *= -a / k;
+        q_sum += c * q;
+        sum += q_sum * delta;
+        if (q_sum * delta).abs() < sum.abs() * f64::EPSILON {
+            let value = FRAC_PI_2.sqrt() / x.sqrt() / sum;
+            return Some((value, value * (0.5 + u + x + (u * u - 0.25) * f) / x));
+        }
+    }
+    None
+}
+
+#[inline]
+fn reduced_order_k(v: f64, x: f64, scaled: bool) -> Option<f64> {
+    // Moderate noninteger orders are cheap via a reduced-order K and stable
+    // recurrence. Restrict the fast path so near-integer cancellation, very
+    // high-order overflow, and small-x special handling use their existing
+    // vetted implementations.
+    if !(1.0..=32.0).contains(&v) || (v - v.round()).abs() < 1e-4 {
+        return None;
+    }
+    let n = v.round() as usize;
+    let u = v - n as f64;
+    let (mut previous, mut current) = if x <= 2.0 {
+        temme_k(u, x)?
+    } else {
+        cf2_k(u, x)?
+    };
+    for k in 1..n {
+        let next = previous + 2.0 * (u + k as f64) / x * current;
+        previous = current;
+        current = next;
+    }
+    let result = if n == 0 { previous } else { current };
+    if !result.is_finite() || result <= 0.0 {
+        return None;
+    }
+    Some(if scaled { result } else { result * (-x).exp() })
+}
+
 /// Positive real K_v(x), with the optional exp(x) scaling.
 pub(crate) fn kv(v: f64, x: f64, scaled: bool) -> f64 {
     let v = v.abs();
@@ -154,6 +266,13 @@ pub(crate) fn kv(v: f64, x: f64, scaled: bool) -> f64 {
         return (log_phase + 0.5 * (FRAC_PI_2.ln() - q.ln()) + correction.ln()).exp();
     }
 
+    // Keep the vetted large-x and uniform Debye paths above in charge of
+    // their original domains; use reduced-order Temme/CF2 only where the
+    // remaining alternative is the much slower general quadrature.
+    if let Some(result) = reduced_order_k(v, x, scaled) {
+        return result;
+    }
+
     // Find the maximum of -x(cosh(t)-1)+log(cosh(vt)). Its derivative
     // is v*tanh(vt)-x*sinh(t), with an interior maximum when v²>x.
     // Subtract its value before exponentiation to keep the quadrature scaled.
@@ -251,6 +370,36 @@ mod tests {
                 actual.is_finite() && (actual / expected - 1.0).abs() < 2e-10,
                 "kve({v},{x})={actual:e}, mpmath={expected:e}"
             );
+        }
+    }
+
+    #[test]
+    fn reduced_order_fast_path_matches_scipy() {
+        // Independent SciPy 1.18.1 exp(x)*K_7.25(x) references across every
+        // CodSpeed cylindrical benchmark argument. Also check K_-v = K_v
+        // and the unscaled result where exp(-x) is representable.
+        for (x, expected) in [
+            (0.05, 250_208_156_526_753.7),
+            (0.5, 21_849_353.312_655_04),
+            (1.0, 229_694.590_696_991_5),
+            (2.5, 1_093.115_229_492_91),
+            (5.0, 44.296_120_801_812_414),
+            (10.0, 4.447_085_082_482_836),
+            (30.0, 0.537_524_873_380_052_6),
+            (100.0, 0.162_571_610_063_528_16),
+        ] {
+            for v in [7.25, -7.25] {
+                let scaled = kv(v, x, true);
+                let unscaled = kv(v, x, false);
+                assert!(
+                    (scaled / expected - 1.0).abs() <= 2e-10,
+                    "kve({v},{x})={scaled:e}, SciPy={expected:e}"
+                );
+                assert!(
+                    (unscaled / (expected * (-x).exp()) - 1.0).abs() <= 2e-10,
+                    "kv({v},{x})={unscaled:e}, SciPy scaled={expected:e}"
+                );
+            }
         }
     }
 }

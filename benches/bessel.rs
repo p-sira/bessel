@@ -187,9 +187,11 @@ mod complex_argument {
         let mut acc = Complex64::new(0.0, 0.0);
         for &v in &ORDERS {
             for &z in &ZS {
-                if let Ok(r) = f(black_box(v), black_box(z)) {
-                    acc += r;
-                }
+                // A failed evaluation must fail the benchmark, not silently
+                // make an expensive numerical path look successful.
+                let r = f(black_box(v), black_box(z))
+                    .unwrap_or_else(|error| panic!("complex benchmark ({v}, {z:?}): {error:?}"));
+                acc += r;
             }
         }
         acc

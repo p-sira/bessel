@@ -199,9 +199,77 @@ fn near_integer(v: f64, z: C, modified: bool) -> Result<C, Error> {
     checked(sum / N as f64)
 }
 
+/// Integer-order Y and K from their convergent harmonic-number expansions.
+///
+/// Differentiating the J/I power series with respect to the order at zero
+/// gives Y0,Y1/K0,K1 without a removable-pole limit. The higher integer
+/// orders follow stable dominant-solution recurrences. In particular, this
+/// replaces 48 Cauchy contour nodes * two full complex-order series for
+/// each common integer-order Hankel call.
+fn integer_second(n: usize, z: C, modified: bool) -> Result<C, Error> {
+    let u = z * 0.5;
+    let t = if modified { u * u } else { -u * u };
+    let logarithm = u.ln() + crate::backend::cephes64::EULER;
+    let mut term = ONE;
+    let mut sum = ONE;
+    let mut next_sum = ONE;
+    let mut harmonic = 0.0;
+    let mut harmonic_sum = ZERO;
+    let mut harmonic_derivative = ZERO;
+    for k in 1..=160 {
+        let kf = k as f64;
+        term *= t / (kf * kf);
+        harmonic += 1.0 / kf;
+        sum += term;
+        next_sum += term / (kf + 1.0);
+        harmonic_sum += harmonic * term;
+        harmonic_derivative += kf * harmonic * term;
+        if k > 8 && term.norm() * (kf + 1.0) < 1e-17 * sum.norm().max(1e-250) {
+            break;
+        }
+    }
+    let first = if modified {
+        -logarithm * sum + harmonic_sum
+    } else {
+        (2.0 / PI) * (logarithm * sum - harmonic_sum)
+    };
+    if n == 0 {
+        return checked(first);
+    }
+    let next = if modified {
+        sum / z + logarithm * u * next_sum - 2.0 * harmonic_derivative / z
+    } else {
+        (2.0 / PI) * (logarithm * u * next_sum - sum / z + 2.0 * harmonic_derivative / z)
+    };
+    if n == 1 {
+        return checked(next);
+    }
+    let (mut a, mut b) = (first, next);
+    for k in 1..n {
+        let c = if modified {
+            a + 2.0 * k as f64 / z * b
+        } else {
+            2.0 * k as f64 / z * b - a
+        };
+        a = b;
+        b = c;
+    }
+    checked(b)
+}
+
 fn small_second(v: f64, z: C, modified: bool) -> Result<C, Error> {
     if z == ZERO {
         return Err(Error::Overflow);
+    }
+    if v == v.round() && v.abs() <= 7.0 && z.norm() <= 10.5 {
+        let n = v.abs() as usize;
+        let result = integer_second(n, z, modified)?;
+        let sign = if !modified && v < 0.0 && n % 2 == 1 {
+            -1.0
+        } else {
+            1.0
+        };
+        return checked(sign * result);
     }
     if (v - v.round()).abs() <= 0.065 {
         return near_integer(v, z, modified);
@@ -400,8 +468,12 @@ fn k_integral(v: f64, z: C) -> Result<C, Error> {
         return Err(Error::ConvergenceFailure);
     }
     let mut last = ZERO;
-    for iter in 0..9 {
-        let intervals = 16 << iter;
+    // Start with one 16-node Gauss panel rather than 16 panels. For the
+    // typical nonoscillatory right-half-plane K integral the first 2–8
+    // panels already reach binary64 accuracy. Starting with 16 and 32
+    // wasted hundreds of complex exponentials on every invocation.
+    for iter in 0..14 {
+        let intervals = 1 << iter;
         let half = end / (2 * intervals) as f64;
         let mut sum = ZERO;
         for k in 0..intervals {
@@ -422,9 +494,83 @@ fn k_integral(v: f64, z: C) -> Result<C, Error> {
     Err(Error::ConvergenceFailure)
 }
 
+/// Complex continuation of Steed's CF2 for exp(z)*K_u(z), |u| <= 1/2.
+/// The real version is proven in sci-special's Cephes/XSF I_v kernel.
+/// In the moderately right-half-plane sector, it avoids repeated complex
+/// exponentials in the K-integral and cancellation of I_{-u}-I_u.
+fn k_cf2_base(u: f64, z: C) -> Option<(C, C)> {
+    let mut a = u * u - 0.25;
+    let mut b = 2.0 * (z + ONE);
+    let mut d = ONE / b;
+    let mut f = d;
+    let mut delta = d;
+    let mut previous = ZERO;
+    let mut current = ONE;
+    let mut c = -a;
+    let mut q_sum = C::new(c, 0.0);
+    let mut sum = ONE + q_sum * delta;
+    let mut k = 1.0;
+    for _ in 2..400 {
+        a -= 2.0 * k;
+        k += 1.0;
+        b += 2.0;
+        d = ONE / (b + a * d);
+        delta *= b * d - ONE;
+        f += delta;
+        let q = (previous - (b - 2.0) * current) / a;
+        previous = current;
+        current = q;
+        c *= -a / k;
+        q_sum += c * q;
+        let correction = q_sum * delta;
+        sum += correction;
+        if !finite(sum) || !finite(f) {
+            return None;
+        }
+        if correction.norm() < f64::EPSILON * sum.norm() {
+            let value = C::new(FRAC_PI_2.sqrt(), 0.0) / z.sqrt() / sum;
+            let next = value * (0.5 + u + z + (u * u - 0.25) * f) / z;
+            return (finite(value) && finite(next)).then_some((value, next));
+        }
+    }
+    None
+}
+
+/// Reduced-order scaled K with stable recurrence to the requested order.
+fn k_cf2(v: f64, z: C, scaled: bool) -> Option<C> {
+    // Conservative sector: the continued fraction converges quickly and
+    // accurately here, whereas it is not reliable near imaginary axes.
+    if !(z.re > 2.0 && z.im.abs() <= z.re * 0.5 && v <= 8.0 && z.norm() < 20.0) || v.fract() == 0.5
+    {
+        return None;
+    }
+    let n = v.round() as usize;
+    let u = v - n as f64;
+    let (mut previous, mut current) = k_cf2_base(u, z)?;
+    for j in 1..n {
+        let next = previous + (2.0 * (u + j as f64) / z) * current;
+        previous = current;
+        current = next;
+    }
+    let value = if n == 0 { previous } else { current };
+    let result = if scaled { value } else { value * (-z).exp() };
+    finite(result).then_some(result)
+}
+
 /// Unscaled/scaled J and Y in the closed right half-plane.
 fn first_second_right(v: f64, z: C, second: bool, scaled: bool) -> Result<C, Error> {
     let factor = if scaled { -z.im.abs() } else { 0.0 };
+    // These pure-real Cephes kernels are also the independently validated
+    // fast paths used by sci-special. Do not use them on the negative-real
+    // cut: first_second() applies signed-rim continuation there.
+    if z.im == 0.0 && z.re > 0.0 && v.abs() <= 8.0 {
+        let value = if second {
+            crate::backend::cephes64::yv(v, z.re)
+        } else {
+            crate::backend::cephes64::jv(v, z.re)
+        };
+        return checked(C::new(value * factor.exp(), 0.0));
+    }
     if v < -8.0 || (v < 0.0 && (v - v.round()).abs() < 0.1) {
         let positive = -v;
         let j = first_second_right(positive, z, false, scaled)?;
@@ -559,6 +705,22 @@ fn i_general(v: f64, z: C, scaled: bool) -> Result<C, Error> {
 /// plane is handled by k_general.
 fn k_right(v: f64, z: C, scaled: bool) -> Result<C, Error> {
     let v = v.abs();
+    if z.im == 0.0 && z.re > 0.0 {
+        if !scaled && z.re > 700.0 {
+            // At order near the argument, K_v is representable even when
+            // exp(-Re z) underflows before multiplication by Kve.
+            let scaled_value = crate::backend::real_k::kv(v, z.re, true);
+            return restore_scale(C::new(scaled_value, 0.0), -z.re, 0.0);
+        }
+        return checked(C::new(crate::backend::real_k::kv(v, z.re, scaled), 0.0));
+    }
+    if v == 0.5 {
+        let prefactor = (C::new(FRAC_PI_2, 0.0) / z).sqrt();
+        return checked(prefactor * if scaled { ONE } else { (-z).exp() });
+    }
+    if let Some(value) = k_cf2(v, z, scaled) {
+        return Ok(value);
+    }
     if v >= 8.0 && z.norm() >= 11.5 {
         if !scaled && z.re > 700.0 {
             // K_0(z) underflows before the upward recurrence can reach a
@@ -567,7 +729,11 @@ fn k_right(v: f64, z: C, scaled: bool) -> Result<C, Error> {
         }
         return dominant_recurrence(v, z, true, scaled);
     }
-    if use_asympt(v, z) {
+    // The inverse-power expansion is extremely accurate once |z| >= 20
+    // for orders below eight, including arguments close to the imaginary
+    // axis where the I_-v - I_v reflection loses many digits. For example
+    // K_7.25(0.1+25i) is accurate to binary64 here, not ~5e-7.
+    if use_asympt(v, z) || (v < 8.0 && z.norm() >= 20.0) {
         return k_asym(v, z, scaled);
     }
     if z.re > 0.1 && (z.norm() > 6.0 || v > 8.0) {
@@ -614,6 +780,10 @@ fn hankel(v: f64, z: C, first: bool, scaled: bool) -> Result<C, Error> {
     // The decaying Hankel solution is evaluated through K in its decaying
     // sector.  This also works when exp(±Im z) is far beyond f64 range.
     if ((first && z.im > 0.0) || (!first && z.im < 0.0))
+        // At moderate arguments, summing J +/- iY is both faster and
+        // stabler than the rotated K quadrature. In particular the latter
+        // fails to converge for H1(7.25, 10+2i).
+        && !(z.norm() <= 14.0 && v.abs() <= 8.0 && z.re.abs() >= z.im.abs())
         && !(v.abs() >= 8.0 && z.re.abs() >= z.im.abs() && z.im.abs() < 12.0)
     {
         let sign = if first { -1.0 } else { 1.0 };
