@@ -492,7 +492,30 @@ pub fn riccati_jn(n: usize, x: f64) -> Result<(Vec<f64>, Vec<f64>)> {
 }
 /// Riccati-Bessel functions x*y_n(x), and their first derivatives, through n.
 pub fn riccati_yn(n: usize, x: f64) -> Result<(Vec<f64>, Vec<f64>)> {
-    riccati(n, x, false)
+    if n > 4096 || !x.is_finite() || x <= 0.0 {
+        return Err(Error::InvalidInput(
+            "Riccati requires positive finite x and n<=4096",
+        ));
+    }
+    // z_n(x) = x*y_n(x) obeys the same three-term recurrence as y_n.
+    // Calculate the entire sequence once, avoiding repeated spherical
+    // recurrences and trigonometric evaluations for every output order.
+    // z_n'(x) = z_(n-1)(x) - n*z_n(x)/x for n>=1.
+    let (sin, cos) = x.sin_cos();
+    let mut values = Vec::with_capacity(n + 1);
+    let mut derivatives = Vec::with_capacity(n + 1);
+    values.push(-cos);
+    derivatives.push(sin);
+    for degree in 1..=n {
+        let value = if degree == 1 {
+            -sin - cos / x
+        } else {
+            ((2 * degree - 1) as f64 / x) * values[degree - 1] - values[degree - 2]
+        };
+        derivatives.push(values[degree - 1] - (degree as f64 / x) * value);
+        values.push(value);
+    }
+    Ok((values, derivatives))
 }
 fn riccati(n: usize, x: f64, first: bool) -> Result<(Vec<f64>, Vec<f64>)> {
     if n > 4096 || !x.is_finite() || x <= 0.0 {
