@@ -2,7 +2,7 @@
 
 The Rust tests read committed input and expected-value files; they do not require
 Python. The independent references were generated with SciPy 1.18.1 and NumPy
-2.5.4 (and mpmath 1.4.1 for large Struve integrals), pinned in each script.
+2.5.4, plus mpmath 1.4.1 where high precision is needed, pinned in each script.
 
 From the crate root, regenerate the fixtures with:
 
@@ -11,6 +11,7 @@ uv run --script tests/scipy/generate_families.py
 uv run --script tests/scipy/generate_itstruve0_large.py
 uv run --script tests/scipy/generate_bessel_iv.py
 uv run --script tests/scipy/generate_tails.py
+uv run --script tests/fixtures/native_generate.py
 ```
 
 The `families_inputs.csv` suite contains 1,192 input cases; real I/IE regressions
@@ -21,6 +22,18 @@ values use independent quadrature of the defining integrals. The 21 large
 references, cross-checked against SciPy quadrature through 5,000. Additional
 fixtures cover complex branch cuts, Hankel derivatives, small nonzero tails,
 and binary32 subnormal results.
+
+`tests/fixtures/native_generate.py` generates `tests/fixtures/native_reference.csv`
+for `cargo test --test native_accuracy` (2,299 cases). It checks the native
+`backend::complex` cylindrical J/Y/I/K and Hankel evaluators (all twelve
+scaled and unscaled public `bessel::complex` APIs), the real `airy`/`airye`
+quartet implemented by `backend::airy`, and positive-real `kv`/`kve` from
+`backend::real_k`. Most complex values use 85-digit mpmath and are cross-checked
+against SciPy AMOS; extreme scaled values use SciPy directly. Signed negative-real
+cut references account for SciPy's handling of negative imaginary zero. Real K
+references include tiny and subnormal arguments, with finite representable values
+retained even where SciPy overflows or underflows. The complex Airy kernel is
+internal; `bessel::airy(x)` and `bessel::airye(x)` are the public real-input APIs.
 
 After regeneration, inspect input and expected-value changes and run:
 

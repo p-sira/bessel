@@ -127,3 +127,32 @@ fn complex_branch_cut_uses_signed_imaginary_zero() {
         Err(Error::InvalidInput(_))
     ));
 }
+
+#[test]
+fn checked_hankel_and_complex_api_share_branch_and_scaling() {
+    type Checked = fn(f64, Complex64) -> std::result::Result<Complex64, &'static str>;
+    type Public = fn(f64, Complex64) -> b::Result<Complex64>;
+    let pairs: [(Checked, Public); 4] = [
+        (b::checked_complex::cyl_hankel_1, b::complex::hankel1),
+        (b::checked_complex::cyl_hankel_2, b::complex::hankel2),
+        (b::checked_complex::cyl_hankel_1e, b::complex::hankel1e),
+        (b::checked_complex::cyl_hankel_2e, b::complex::hankel2e),
+    ];
+
+    for (v, z) in [
+        (0.75, Complex64::new(-3.0, 0.0)),
+        (0.75, Complex64::new(-3.0, -0.0)),
+        (2.5, Complex64::new(-3.0, 1e-12)),
+        (-1.3, Complex64::new(1.25, -2.0)),
+        (18.0, Complex64::new(8.0, 11.0)),
+    ] {
+        for &(checked, public) in &pairs {
+            let actual = checked(v, z).unwrap();
+            let expected = public(v, z).unwrap();
+            assert!(
+                (actual - expected).norm() <= 5e-13 * expected.norm().max(1.0),
+                "checked and public Hankel diverged at order={v}, z={z}: {actual} vs {expected}"
+            );
+        }
+    }
+}

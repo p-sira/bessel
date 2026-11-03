@@ -58,7 +58,7 @@
 //! - Kelvin functions are the real and imaginary components of
 //!   `J_0(x exp(3πi/4))` and `K_0(x exp(πi/4))`.
 //!
-//! Complex functions follow the AMOS principal branches. For defining formulas,
+//! Complex functions follow the principal branches used by AMOS. For defining formulas,
 //! principal branches, and analytic continuation, see
 //! [NIST DLMF Chapter 10](https://dlmf.nist.gov/10) and
 //! [NIST DLMF Chapter 11](https://dlmf.nist.gov/11). For the modified Bessel
@@ -76,7 +76,7 @@
 //! ```
 #![forbid(unsafe_code)]
 mod backend;
-pub use backend::bessel::Airy;
+pub use backend::airy::Airy;
 pub use backend::kelvin::{Kelvin, KelvinFunction};
 pub use num_complex::{Complex, Complex64};
 
@@ -105,13 +105,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub mod checked_complex {
     pub use crate::backend::bessel::{cyl_hankel_1, cyl_hankel_1e, cyl_hankel_2, cyl_hankel_2e};
 }
-/// The Airy quartet (Ai, Ai′, Bi, Bi′) evaluated using Bessel-related
-/// Cephes/AMOS kernels, included for users of the large-order uniform expansions.
+/// The Airy quartet (Ai, Ai′, Bi, Bi′), using real Cephes and native complex kernels.
 pub fn airy<T: num_traits::Float>(x: T) -> Result<Airy<T>> {
     if !x.is_finite() {
         return Err(Error::InvalidInput("airy requires a finite argument"));
     }
-    backend::bessel::airy_real(x, false).map_err(Error::NumericalFailure)
+    backend::airy::real(x, false).map_err(Error::NumericalFailure)
 }
 /// Scaled Airy quartet (Ai, Ai′, Bi, Bi′). For real x, requires x>=0.
 pub fn airye<T: num_traits::Float>(x: T) -> Result<Airy<T>> {
@@ -120,7 +119,7 @@ pub fn airye<T: num_traits::Float>(x: T) -> Result<Airy<T>> {
             "airye requires a finite nonnegative argument",
         ));
     }
-    backend::bessel::airy_real(x, true).map_err(Error::NumericalFailure)
+    backend::airy::real(x, true).map_err(Error::NumericalFailure)
 }
 /// Checked Kelvin component and zero-finder functions.
 pub mod checked {
@@ -318,35 +317,23 @@ pub fn keip_zeros(nt: usize) -> Result<Vec<f64>> {
 /// caller's floating-point type. Invalid, overflowing, and unconverged
 /// evaluations return the shared [`Error`] type.
 pub mod complex {
+    use crate::backend::complex::{self as kernel, Kind};
     use crate::{Complex, Complex64, Error, Result};
     use num_traits::Float;
 
-    type Kernel = fn(f64, Complex64) -> std::result::Result<Complex64, complex_bessel::Error>;
-
-    fn evaluate<T: Float>(v: T, z: Complex<T>, upper: Kernel, lower: Kernel) -> Result<Complex<T>> {
+    fn evaluate<T: Float>(v: T, z: Complex<T>, family: Kind, scaled: bool) -> Result<Complex<T>> {
         if !v.is_finite() || !z.re.is_finite() || !z.im.is_finite() {
             return Err(Error::InvalidInput(
                 "Bessel order and argument must be finite",
             ));
         }
         let v = v.to_f64().ok_or(Error::NonFiniteEvaluation)?;
-        let mut z = Complex64::new(
+        let z = Complex64::new(
             z.re.to_f64().ok_or(Error::NonFiniteEvaluation)?,
             z.im.to_f64().ok_or(Error::NonFiniteEvaluation)?,
         );
-        let on_lower_rim = z.re < 0.0 && z.im == 0.0 && z.im.is_sign_negative();
-        let kernel = if on_lower_rim {
-            // AMOS identifies both zero signs as the upper bank. Schwarz
-            // reflection conjugates the upper value of the reflected kernel.
-            z.im = 0.0;
-            lower
-        } else {
-            upper
-        };
-        let result = kernel(v, z).map_err(|error| {
-            Error::NumericalFailure(crate::backend::bessel::backend_error(error))
-        })?;
-        let result = if on_lower_rim { result.conj() } else { result };
+        let result = kernel::cylindrical(family, v, z, scaled)
+            .map_err(|error| Error::NumericalFailure(error.message()))?;
         if !result.re.is_finite() || !result.im.is_finite() {
             return Err(Error::NonFiniteEvaluation);
         }
@@ -359,39 +346,39 @@ pub mod complex {
     }
 
     macro_rules! bessel_complex {
-        ($($(#[$meta:meta])* $name:ident, $upper:ident, $lower:ident;)+) => {$(
+        ($($(#[$meta:meta])* $name:ident, $kind:ident, $scaled:expr;)+) => {$(
             $(#[$meta])*
             pub fn $name<T: Float>(v: T, z: Complex<T>) -> Result<Complex<T>> {
-                evaluate(v, z, complex_bessel::$upper, complex_bessel::$lower)
+                evaluate(v, z, Kind::$kind, $scaled)
             }
         )+};
     }
 
     bessel_complex! {
         /// Jν(z) on the principal branch.
-        jv, besselj, besselj;
+        jv, J, false;
         /// Yν(z) on the principal branch.
-        yv, bessely, bessely;
+        yv, Y, false;
         /// Iν(z) on the principal branch.
-        iv, besseli, besseli;
+        iv, I, false;
         /// Kν(z) on the principal branch.
-        kv, besselk, besselk;
+        kv, K, false;
         /// Scaled Jν(z), exp(-|Im z|) Jν(z).
-        jve, besselj_scaled, besselj_scaled;
+        jve, J, true;
         /// Scaled Yν(z), exp(-|Im z|) Yν(z).
-        yve, bessely_scaled, bessely_scaled;
+        yve, Y, true;
         /// Scaled Iν(z), exp(-|Re z|) Iν(z).
-        ive, besseli_scaled, besseli_scaled;
+        ive, I, true;
         /// Scaled Kν(z), exp(z) Kν(z).
-        kve, besselk_scaled, besselk_scaled;
+        kve, K, true;
         /// Hankel Hν¹(z).
-        hankel1, hankel1, hankel2;
+        hankel1, Hankel1, false;
         /// Hankel Hν²(z).
-        hankel2, hankel2, hankel1;
+        hankel2, Hankel2, false;
         /// Scaled Hν¹(z) = exp(-iz) Hν¹(z).
-        hankel1e, hankel1_scaled, hankel2_scaled;
+        hankel1e, Hankel1, true;
         /// Scaled Hν²(z) = exp(iz) Hν²(z).
-        hankel2e, hankel2_scaled, hankel1_scaled;
+        hankel2e, Hankel2, true;
     }
 }
 /// First-kind Hankel Hν¹(x), on the upper rim of the negative real cut.
