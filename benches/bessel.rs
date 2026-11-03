@@ -211,6 +211,26 @@ mod complex_argument {
     fn hankel1() -> Complex64 {
         sweep_complex(bessel::complex::hankel1)
     }
+
+    // The nearly imaginary K sector used to enter an oscillatory integral
+    // with tens of thousands of expensive complex exponentials.
+    #[divan::bench]
+    fn kv_near_imag_axis() -> Complex64 {
+        let z = Complex64::new(0.11, 19.9);
+        [2.25, 7.25, 7.99]
+            .iter()
+            .map(|&v| bessel::complex::kv(black_box(v), black_box(z)).unwrap())
+            .sum()
+    }
+
+    #[divan::bench]
+    fn hankel1_near_real_axis() -> Complex64 {
+        let z = Complex64::new(19.9, 0.11);
+        [2.25, 7.25, 7.99]
+            .iter()
+            .map(|&v| bessel::complex::hankel1(black_box(v), black_box(z)).unwrap())
+            .sum()
+    }
 }
 
 mod spherical {
@@ -305,6 +325,13 @@ mod zeros {
     fn jnyn_zeros(nt: usize) -> usize {
         bessel::jnyn_zeros(black_box(3), black_box(nt))
             .map(|z| z.iter().map(Vec::len).sum())
+            .unwrap_or(0)
+    }
+
+    #[divan::bench(args = [10, 64, 128])]
+    fn jnjnp_zeros(nt: usize) -> usize {
+        bessel::jnjnp_zeros(black_box(nt))
+            .map(|z| z[0].len())
             .unwrap_or(0)
     }
 

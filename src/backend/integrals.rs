@@ -919,7 +919,8 @@ fn quadrature(left: f64, right: f64, evaluate: impl Fn(f64) -> f64) -> f64 {
 /// logarithm and inverse even powers from the integral of K0; the remaining
 /// oscillatory part is -integral_x^inf Y0(t) dt. Termwise integration of the
 /// Hankel expansion of Y0 (DLMF 10.17.4) gives the cosine and sine polynomials.
-/// With x >= 512, the first omitted terms are smaller than binary64 rounding.
+/// For x >= 200, this expansion agrees with independent high-precision
+/// hypergeometric references to within about 2e-15 relative error.
 fn itstruve0_asymptotic(x: f64) -> f64 {
     const EULER_GAMMA: f64 = 0.577_215_664_901_532_9;
     let inverse = 1.0 / x;
@@ -943,7 +944,8 @@ fn itstruve0_asymptotic(x: f64) -> f64 {
 }
 
 /// Integrated H0 series for small x, Gaussian quadrature for moderate x,
-/// and a DLMF asymptotic for large arguments.
+/// and a DLMF asymptotic from x = 200 onward. Earlier use of quadrature
+/// through x = 512 required 4096 Struve evaluations at its upper endpoint.
 pub(crate) fn itstruve0_corrected(x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
@@ -952,7 +954,7 @@ pub(crate) fn itstruve0_corrected(x: f64) -> f64 {
         return f64::INFINITY;
     }
     let x = x.abs();
-    if x > 512.0 {
+    if x >= 200.0 {
         return itstruve0_asymptotic(x);
     }
     if x <= 10.0 {

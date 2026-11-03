@@ -82,6 +82,11 @@ fn real(n: i32, x: f64, kind: u8) -> Result<f64, StrErr> {
             * match kind {
                 0 => x.sin() / x,
                 1 => -x.cos() / x,
+                2 if x > 700.0 => {
+                    // sinh(x)/x can still fit after exp(x-ln(x)) overflows.
+                    // For x this large, exp(-2*x) is negligible.
+                    (x - x.ln() - core::f64::consts::LN_2).exp()
+                }
                 2 => 0.5 * ((x - x.ln()).exp() - (-x - x.ln()).exp()),
                 _ => core::f64::consts::FRAC_PI_2 * (-x).exp() / x,
             });
