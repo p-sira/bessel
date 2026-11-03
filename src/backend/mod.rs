@@ -1,5 +1,27 @@
 #![allow(clippy::excessive_precision, unused_imports)]
 pub type StrErr = &'static str;
+
+/// Numerical errors shared by the native cylindrical and Airy kernels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KernelError {
+    InvalidInput,
+    Overflow,
+    TotalPrecisionLoss,
+    ConvergenceFailure,
+}
+
+impl KernelError {
+    /// Map a kernel failure to the traditional checked-backend error string.
+    pub(crate) fn message(self) -> StrErr {
+        match self {
+            Self::InvalidInput => "Bessel/Airy: Invalid or nonfinite argument.",
+            Self::Overflow => "Bessel/Airy: Overflow; use an exponentially scaled function.",
+            Self::TotalPrecisionLoss => "Bessel/Airy: Argument too large for meaningful precision.",
+            Self::ConvergenceFailure => "Bessel/Airy: Iteration did not converge.",
+        }
+    }
+}
+pub(crate) mod airy;
 pub(crate) mod bessel;
 pub(crate) mod cephes64;
 pub(crate) mod complex;
@@ -7,6 +29,7 @@ pub(crate) mod double_double;
 pub(crate) mod integrals;
 pub(crate) mod kelvin;
 pub(crate) mod ratios;
+pub(crate) mod real_k;
 pub(crate) mod spherical;
 pub(crate) mod struve;
 pub(crate) mod utils;

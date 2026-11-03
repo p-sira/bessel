@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Sira Pornsiriprasert <code@psira.me>"]
-documentation = "https://docs.rs/orthogonal"
-homepage = "https://github.com/p-sira/orthogonal"
-repository = "https://github.com/p-sira/orthogonal"
+documentation = "https://docs.rs/bessel"
+homepage = "https://github.com/p-sira/bessel"
+repository = "https://github.com/p-sira/bessel"
 license = "BSD-3-Clause"
 
-description = "Pure Rust cylindrical, spherical, Kelvin, Hankel and Struve functions"
+description = "Pure Rust library for Bessel and related special functions, including cylindrical, spherical, Hankel, Kelvin, Struve, and Airy functions."
 categories = ["mathematics", "science"]
 keywords = ["bessel", "hankel", "struve", "kelvin", "spherical"]
 readme = "README.md"
@@ -18,7 +18,6 @@ include = ["/src/**", "/LICENSE", "/LICENSES/**"]
 [dependencies]
 num-traits = "0.2"
 num-complex = "0.4"
-complex-bessel = "0.3"
 
 [dev-dependencies]
 divan = { version = "6.0.0", package = "codspeed-divan-compat" }

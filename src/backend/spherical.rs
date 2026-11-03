@@ -86,7 +86,13 @@ fn real(n: i32, x: f64, kind: u8) -> Result<f64, StrErr> {
                 _ => core::f64::consts::FRAC_PI_2 * (-x).exp() / x,
             });
     }
-    // Elementary recurrences avoid the general half-integer AMOS kernels for
+    if kind == 3 {
+        // k_n = π e^(-x)/(2x) times a positive finite polynomial in 1/x.
+        // Upward recurrence is stable for this solution. Work with the
+        // exponentially scaled polynomial so x>~745 does not erase the seed.
+        return Ok(sign * spherical_k(n, x));
+    }
+    // Elementary recurrences avoid the general half-integer complex kernels for
     // the common moderate-order cases, as xsf's spherical kernels do.
     match kind {
         0 if x > n as f64 => return Ok(sign * upward(n, x, false)),
@@ -99,20 +105,42 @@ fn real(n: i32, x: f64, kind: u8) -> Result<f64, StrErr> {
         _ => {}
     }
     let order = n as f64 + 0.5;
-    let z = Complex64::new(x, 0.0);
-    let result = match kind {
-        0 => complex_bessel::besselj(order, z),
-        1 => complex_bessel::bessely(order, z),
-        2 => {
-            let value = crate::backend::cyl_bessel_ie(order, x)?;
-            let prefactor = (core::f64::consts::FRAC_PI_2 / x).sqrt();
-            let e = (0.5 * x).exp();
-            return Ok(sign * (prefactor * value * e) * e);
-        }
-        _ => complex_bessel::besselk(order, z),
+    if kind == 2 {
+        let value = crate::backend::cyl_bessel_ie(order, x)?;
+        let prefactor = (core::f64::consts::FRAC_PI_2 / x).sqrt();
+        let e = (0.5 * x).exp();
+        return Ok(sign * (prefactor * value * e) * e);
     }
-    .map_err(crate::backend::bessel::backend_error)?;
+    // The only remaining fallback is spherical j_n for large order and
+    // x <= n, after the direct series and Miller recurrence paths.
+    let result = crate::backend::complex::cylindrical(
+        crate::backend::complex::Kind::J,
+        order,
+        Complex64::new(x, 0.0),
+        false,
+    )
+    .map_err(crate::backend::KernelError::message)?;
     Ok(sign * (core::f64::consts::FRAC_PI_2 / x).sqrt() * result.re)
+}
+
+fn spherical_k(n: i32, x: f64) -> f64 {
+    let mut previous = core::f64::consts::FRAC_PI_2 / x;
+    let mut current = previous * (1.0 + 1.0 / x);
+    if !current.is_finite() {
+        return f64::INFINITY;
+    }
+    let mut log_scale = 0.0;
+    for k in 1..n {
+        let next = previous + (2 * k + 1) as f64 / x * current;
+        previous = current;
+        current = next;
+        if current > 1e200 {
+            previous *= 1e-200;
+            current *= 1e-200;
+            log_scale += 200.0 * core::f64::consts::LN_10;
+        }
+    }
+    (current.ln() + log_scale - x).exp()
 }
 /// Upward recurrence from the elementary j_0, j_1 or y_0, y_1 values. It is
 /// stable for y_n at every x > 0 and for j_n when x > n.
