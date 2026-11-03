@@ -10,6 +10,9 @@
     <a href="https://docs.rs/bessel" style="text-decoration:none">
         <img src="https://img.shields.io/badge/Docs-docs.rs-blue" alt="Documentation">
     </a>
+    <a href="https://app.codspeed.io/p-sira/bessel?utm_source=badge" style="text-decoration:none">
+        <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed"/>
+    </a>
 </p>
 
 Pure Rust library for cylindrical, spherical, Hankel, Kelvin, and Struve functions.
