@@ -969,6 +969,53 @@ pub(crate) fn itstruve0_corrected(x: f64) -> f64 {
             }
         }
         square * sum / PI
+    } else if x <= 24.0 {
+        // Chebyshev approximation on [10,24], with coefficients from the
+        // independently evaluated 100-digit integrated defining series.
+        // Avoid repeated Struve evaluations inside Gaussian quadrature for
+        // this well-conditioned moderate-argument range. 30-term Clenshaw
+        // evaluation agrees with the defining series to binary64 precision.
+        const COEFFS: [f64; 30] = [
+            2.64043445892250972e+00,
+            2.49257779660430639e-01,
+            8.40097285831148816e-02,
+            -4.47291815478741001e-02,
+            6.37105452831351754e-02,
+            -5.53446457174878309e-02,
+            -1.17171559111163739e-01,
+            4.91628886389838052e-02,
+            4.06014366605065569e-02,
+            -1.38077229284536557e-02,
+            -6.86794559981943921e-03,
+            2.06806073252160764e-03,
+            7.11813275090017006e-04,
+            -1.96884902295914126e-04,
+            -5.05757532668807042e-05,
+            1.30976606909748167e-05,
+            2.63852449695768356e-06,
+            -6.46932392889342221e-07,
+            -1.05890399083151552e-07,
+            2.47553628306170966e-08,
+            3.38147571122969529e-09,
+            -7.57380213532717924e-10,
+            -8.81591380397010012e-11,
+            1.89829318710235619e-11,
+            1.91480515312742977e-12,
+            -3.97407039435626742e-13,
+            -3.52198413143367208e-14,
+            7.05995285185939658e-15,
+            5.55988095185977544e-16,
+            -1.09271641296022452e-16,
+        ];
+        let y = (x - 17.0) / 7.0;
+        let two_y = 2.0 * y;
+        let (mut b0, mut b1) = (0.0, 0.0);
+        for &coefficient in COEFFS[1..].iter().rev() {
+            let next = two_y * b0 + (coefficient - b1);
+            b1 = b0;
+            b0 = next;
+        }
+        y * b0 + (COEFFS[0] - b1)
     } else {
         quadrature(0.0, x, |t| super::struve_h(0.0, t).unwrap_or(f64::NAN))
     }
