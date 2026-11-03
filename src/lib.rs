@@ -383,19 +383,47 @@ pub mod complex {
 }
 /// First-kind Hankel Hν¹(x), on the upper rim of the negative real cut.
 pub fn hankel1(v: f64, x: f64) -> Complex64 {
+    if v == 1.5 && (1e-100..=1e12).contains(&x) {
+        return hankel_three_halves(x, false, false);
+    }
     complex::hankel1(v, Complex64::new(x, 0.0)).unwrap_or(Complex64::new(f64::NAN, f64::NAN))
 }
 /// Second-kind Hankel Hν²(x), on the upper rim of the negative real cut.
 pub fn hankel2(v: f64, x: f64) -> Complex64 {
+    if v == 1.5 && (1e-100..=1e12).contains(&x) {
+        return hankel_three_halves(x, true, false);
+    }
     complex::hankel2(v, Complex64::new(x, 0.0)).unwrap_or(Complex64::new(f64::NAN, f64::NAN))
 }
 /// Scaled Hankel exp(-ix) Hν¹(x).
 pub fn hankel1e(v: f64, x: f64) -> Complex64 {
+    if v == 1.5 && (1e-100..=1e12).contains(&x) {
+        return hankel_three_halves(x, false, true);
+    }
     complex::hankel1e(v, Complex64::new(x, 0.0)).unwrap_or(Complex64::new(f64::NAN, f64::NAN))
 }
 /// Scaled Hankel exp(ix) Hν²(x).
 pub fn hankel2e(v: f64, x: f64) -> Complex64 {
+    if v == 1.5 && (1e-100..=1e12).contains(&x) {
+        return hankel_three_halves(x, true, true);
+    }
     complex::hankel2e(v, Complex64::new(x, 0.0)).unwrap_or(Complex64::new(f64::NAN, f64::NAN))
+}
+
+// H_(3/2)^(1,2)(x) = -sqrt(2/(pi*x)) exp(±ix) (1 ± i/x).
+// Evaluate the scaled forms directly to avoid oscillatory complex-Bessel
+// iterations and the unscaled forms with a single shared sin/cos reduction.
+#[inline]
+fn hankel_three_halves(x: f64, second_kind: bool, scaled: bool) -> Complex64 {
+    let amplitude = -(std::f64::consts::FRAC_2_PI).sqrt() / x.sqrt();
+    let sign = if second_kind { -1.0 } else { 1.0 };
+    let factor = Complex64::new(1.0, sign / x);
+    if scaled {
+        amplitude * factor
+    } else {
+        let (sin, cos) = x.sin_cos();
+        amplitude * Complex64::new(cos, sign * sin) * factor
+    }
 }
 /// Derivative dⁿ/dxⁿ fν(x) from adjacent orders:
 /// `2^{-n}Σ(k=0..n) C(n,k) s^k f_{ν-n+2k}(x)`,

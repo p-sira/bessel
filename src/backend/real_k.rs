@@ -104,7 +104,10 @@ fn reduced_order_k(v: f64, x: f64, scaled: bool) -> Option<f64> {
     // recurrence. Restrict the fast path so near-integer cancellation, very
     // high-order overflow, and small-x special handling use their existing
     // vetted implementations.
-    if !(1.0..=32.0).contains(&v) || (v - v.round()).abs() < 1e-4 {
+    // The reduced-order algorithms also work for positive orders below one:
+    // n=0 directly returns K_u; n=1 directly returns K_(u+1). Previously
+    // those inputs fell through to expensive adaptive quadrature.
+    if !(1e-4..=32.0).contains(&v) || (v - v.round()).abs() < 1e-4 {
         return None;
     }
     let n = v.round() as usize;
