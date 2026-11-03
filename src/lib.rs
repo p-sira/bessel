@@ -489,6 +489,12 @@ enum RootKind {
     YPrime,
 }
 fn bessel_roots(n: u32, nt: usize, kind: RootKind) -> Result<Vec<f64>> {
+    bessel_roots_bounded(n, nt, kind, f64::INFINITY)
+}
+
+// For merged zero sequences, later roots can be discarded as soon as their
+// bracket starts past the current n-th smallest candidate.
+fn bessel_roots_bounded(n: u32, nt: usize, kind: RootKind, limit: f64) -> Result<Vec<f64>> {
     if n > 256 || !(1..=256).contains(&nt) {
         return Err(Error::InvalidInput(
             "Bessel roots require n<=256 and count in 1..=256",
@@ -502,10 +508,16 @@ fn bessel_roots(n: u32, nt: usize, kind: RootKind) -> Result<Vec<f64>> {
         RootKind::YPrime => yvp(v, x, 1),
     };
     let mut a = v.max(0.01);
+    if a >= limit {
+        return Ok(Vec::new());
+    }
     let mut fa = f(a);
     let mut zeros = Vec::with_capacity(nt);
     for _ in 0..(nt + 256) * 32 {
-        let b = a + std::f64::consts::FRAC_PI_4;
+        if a >= limit {
+            return Ok(zeros);
+        }
+        let b = (a + std::f64::consts::FRAC_PI_4).min(limit);
         let fb = f(b);
         if fa.is_finite()
             && fb.is_finite()
@@ -597,10 +609,20 @@ pub fn jnjnp_zeros(nt: usize) -> Result<[Vec<f64>; 4]> {
     }
     let mut entries: Vec<(f64, f64, f64, f64)> = vec![(0.0, 0.0, 0.0, 1.0)];
     let cutoff = ((nt as f64) * 8.0).sqrt() + 4.0;
+    let mut limit = if nt == 1 { 0.0 } else { f64::INFINITY };
     for n in 0..=cutoff.ceil() as u32 {
         for (kind, flag) in [(RootKind::J, 0.0), (RootKind::JPrime, 1.0)] {
-            for (index, x) in bessel_roots(n, nt, kind)?.into_iter().enumerate() {
+            // Preserve candidates within the sorting tolerance so that equal
+            // J/J' roots retain the existing derivative-flag tie ordering.
+            for (index, x) in bessel_roots_bounded(n, nt, kind, limit + 2e-12)?
+                .into_iter()
+                .enumerate()
+            {
                 entries.push((x, f64::from(n), (index + 1) as f64, flag));
+            }
+            if entries.len() >= nt {
+                entries.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.3.total_cmp(&a.3)));
+                limit = limit.min(entries[nt - 1].0);
             }
         }
     }
@@ -694,15 +716,15 @@ pub fn iv_ratioinv<T: num_traits::Float>(v: T, r: T) -> T {
 }
 /// Weighted Bessel integral `∫₀¹ t^lambda J_v(2 a t) dt`.
 ///
-/// The defining series converges for a≥0 and lambda+v>−1.
+/// The defining series converges for a>0 and lambda+v>−1; negative
+/// integer orders are reduced using J_(-n)=(-1)^n J_n before applying
+/// this domain restriction. At a=0, negative noninteger orders have
+/// their signed divergent limit.
 /// Returns NaN for invalid nonfinite inputs. Uses a bounded series with
 /// up to 1000 terms; loss of significance is possible for large a.
 pub fn besselpoly(a: f64, lambda: f64, mut v: f64) -> f64 {
-    if !a.is_finite() || !lambda.is_finite() || !v.is_finite() || a < 0.0 || lambda + v <= -1.0 {
+    if !a.is_finite() || !lambda.is_finite() || !v.is_finite() || a < 0.0 {
         return f64::NAN;
-    }
-    if a == 0.0 {
-        return if v == 0.0 { 1.0 / (lambda + 1.0) } else { 0.0 };
     }
     let mut sign = 1.0;
     if v < 0.0 && v == v.floor() {
@@ -710,6 +732,18 @@ pub fn besselpoly(a: f64, lambda: f64, mut v: f64) -> f64 {
         if v % 2.0 != 0.0 {
             sign = -1.0;
         }
+    }
+    if lambda + v <= -1.0 {
+        return f64::NAN;
+    }
+    if a == 0.0 {
+        return if v == 0.0 {
+            1.0 / (lambda + 1.0)
+        } else if v < 0.0 {
+            f64::INFINITY.copysign(backend::cephes64::gamma(v + 1.0))
+        } else {
+            sign * 0.0
+        };
     }
     let mut term = (v * a.ln()).exp() / (backend::cephes64::gamma(v + 1.0) * (lambda + v + 1.0));
     let mut sum = 0.0;
@@ -765,7 +799,7 @@ pub fn it2i0k0(x: f64) -> (f64, f64) {
 ///
 /// # Numerical behavior
 ///
-/// Uses a convergent series for `|x| <= 10`, quadrature for `10 < |x| <= 512`,
+/// Uses a convergent series for `|x| <= 10`, quadrature for `10 < |x| < 200`,
 /// then an asymptotic expansion including the oscillatory Y₀ tail. The large
 /// argument branch avoids intermediate overflow and phase loss in `x - π/4`.
 ///

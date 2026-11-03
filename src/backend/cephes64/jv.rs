@@ -206,9 +206,14 @@ pub fn jv(n: f64, x: f64) -> f64 {
          */
         if n < 0.0 {
             // case 31
-            //sf_error("Jv", SF_ERROR_LOSS, NULL);
-            y = f64::NAN;
-            return sign as f64 * y;
+            // Cephes does not provide a negative-fractional-order uniform
+            // expansion. Reflect through positive orders, where both J and
+            // Y have stable large-order kernels. This branch is restricted
+            // to n <= -500; ordinary J calls retain their existing path.
+            // Y_a's large-order path uses the native complex recurrence,
+            // rather than calling back into negative-order real J.
+            return crate::backend::cephes64::cospi(an) * jv(an, x)
+                - crate::backend::cephes64::sinpi(an) * crate::backend::cephes64::yv(an, x);
         }
         t = x / n;
         t /= n;

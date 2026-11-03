@@ -313,6 +313,36 @@ fn k_asym(v: f64, z: C, scaled: bool) -> Result<C, Error> {
     checked((C::new(FRAC_PI_2, 0.0) / z).sqrt() * exponent.exp() * polynomial)
 }
 
+/// Use the recessive K expansion near the imaginary axis only when its
+/// smallest term is sufficiently small. For orders near eight and |z|≈15,
+/// the first term can already be increasing, so the ordinary radius cutoff
+/// alone is insufficient.
+fn k_asym_precise(v: f64, z: C, scaled: bool) -> Option<C> {
+    let mut sum = ONE;
+    let mut term = ONE;
+    let mut previous = f64::INFINITY;
+    for k in 1..=200 {
+        let odd = (2 * k - 1) as f64;
+        term *= ((4.0 * v * v - odd * odd) / (8.0 * k as f64)) / z;
+        let magnitude = term.norm();
+        if magnitude > previous {
+            if previous <= 2.0e-12 * sum.norm() {
+                return k_asym(v, z, scaled).ok();
+            }
+            return None;
+        }
+        sum += term;
+        if magnitude <= 2.0e-12 * sum.norm() {
+            return checked(
+                (C::new(FRAC_PI_2, 0.0) / z).sqrt() * if scaled { ONE } else { (-z).exp() } * sum,
+            )
+            .ok();
+        }
+        previous = magnitude;
+    }
+    None
+}
+
 fn use_asympt(v: f64, z: C) -> bool {
     let radius = z.norm();
     // Fixed-order asymptotics are inappropriate close to a large-order
@@ -487,6 +517,54 @@ fn k_integral(v: f64, z: C) -> Result<C, Error> {
         }
         checked(sum)?;
         if iter >= 1 && (sum - last).norm() < 2.0e-13 * sum.norm() {
+            return Ok(sum);
+        }
+        last = sum;
+    }
+    Err(Error::ConvergenceFailure)
+}
+
+/// The direct real-axis K integral oscillates too rapidly for nearly
+/// imaginary z. Shift the t contour by -sign(Im z)*i*pi/2 instead: the
+/// horizontal part then decays as exp(-|Im z| sinh(t)), while the short
+/// vertical part is a smooth integral over [0, pi/2].
+fn k_rotated_integral(v: f64, z: C) -> Result<C, Error> {
+    let sign = z.im.signum();
+    let decay = z.im.abs();
+    let angle = v * FRAC_PI_2;
+    let mut end: f64 = 1.0;
+    while decay * end.sinh() - v * end < 65.0 && end < 12.0 {
+        end += 0.25;
+    }
+    if end >= 12.0 {
+        return Err(Error::ConvergenceFailure);
+    }
+    let mut last = ZERO;
+    for iter in 0..9 {
+        let panels = 1 << iter;
+        let mut sum = ZERO;
+        for panel in 0..panels {
+            for (span, vertical) in [(FRAC_PI_2, true), (end, false)] {
+                let half = span / (2 * panels) as f64;
+                let center = (panel as f64 + 0.5) * span / panels as f64;
+                for j in 0..8 {
+                    for t in [center - half * GL16_X[j], center + half * GL16_X[j]] {
+                        let integrand = if vertical {
+                            -sign * I * (-z * t.cos()).exp() * (v * t).cos()
+                        } else {
+                            let hyperbolic = C::new(
+                                (v * t).cosh() * angle.cos(),
+                                -sign * (v * t).sinh() * angle.sin(),
+                            );
+                            (sign * I * z * t.sinh()).exp() * hyperbolic
+                        };
+                        sum += half * GL16_W[j] * integrand;
+                    }
+                }
+            }
+        }
+        checked(sum)?;
+        if iter >= 1 && (sum - last).norm() <= 1.0e-13 * sum.norm() {
             return Ok(sum);
         }
         last = sum;
@@ -715,7 +793,8 @@ fn k_right(v: f64, z: C, scaled: bool) -> Result<C, Error> {
         return checked(C::new(crate::backend::real_k::kv(v, z.re, scaled), 0.0));
     }
     if v == 0.5 {
-        let prefactor = (C::new(FRAC_PI_2, 0.0) / z).sqrt();
+        // Avoid overflow in pi/(2*z) when the final half-order K is finite.
+        let prefactor = FRAC_PI_2.sqrt() / z.sqrt();
         return checked(prefactor * if scaled { ONE } else { (-z).exp() });
     }
     if let Some(value) = k_cf2(v, z, scaled) {
@@ -735,6 +814,13 @@ fn k_right(v: f64, z: C, scaled: bool) -> Result<C, Error> {
     // K_7.25(0.1+25i) is accurate to binary64 here, not ~5e-7.
     if use_asympt(v, z) || (v < 8.0 && z.norm() >= 20.0) {
         return k_asym(v, z, scaled);
+    }
+    if v < 9.0 && z.im.abs() >= 8.0 && z.re <= 0.5 * z.im.abs() {
+        if let Some(value) = k_asym_precise(v, z, scaled) {
+            return Ok(value);
+        }
+        let value = k_rotated_integral(v, z)?;
+        return checked(if scaled { value * z.exp() } else { value });
     }
     if z.re > 0.1 && (z.norm() > 6.0 || v > 8.0) {
         let value = k_integral(v, z)?;
