@@ -13,7 +13,7 @@ description = "Pure Rust library for Bessel and related special functions, inclu
 categories = ["mathematics", "science"]
 keywords = ["bessel", "hankel", "struve", "kelvin", "spherical"]
 readme = "README.md"
-include = ["/src/**", "/LICENSE", "/LICENSES/**"]
+include = ["/src/**", "/LICENSE", "/LICENSES/**", "/CHANGELOG.md"]
 
 [dependencies]
 num-traits = "0.2"
