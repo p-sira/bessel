@@ -2,7 +2,7 @@
 
 <p align="center">
     <a href="LICENSE" style="text-decoration:none">
-        <img src="https://img.shields.io/badge/License-See%20LICENSE-brightgreen.svg" alt="License">
+        <img src="https://img.shields.io/badge/License-BSD--3--Clause-brightgreen.svg" alt="License">
     </a>
     <a href="https://crates.io/crates/bessel" style="text-decoration:none">
         <img src="https://img.shields.io/crates/v/bessel" alt="Crate">
