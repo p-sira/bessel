@@ -7,6 +7,8 @@
 **Performance Improvements**
 - Bound merged `jnjnp_zeros` searches to avoid unnecessary roots while retaining an unbounded fallback; fast-path the exact origin-only case ([#6](https://github.com/p-sira/bessel/pull/6)). 
 - Reduce redundant work in Kelvin series, modified Bessel ratios/large-order K, spherical K derivatives, complex K integrals and integer-power integral recurrences ([#6](https://github.com/p-sira/bessel/pull/6)).
+- Reuse nested trapezoidal nodes and solve the real-K saddle with safeguarded Newton iterations; share neighboring spherical J/I recurrence values for derivatives. Avoid unnecessary complex norms in Bessel series and Miller recurrences while preserving extreme-scale convergence safeguards.
+- Add high-precision references for real-K saddle boundaries and quadrature, complex Bessel series/continued fractions, and spherical derivatives, with targeted CodSpeed workloads for each optimized path.
 
 ### 0.1.1
 

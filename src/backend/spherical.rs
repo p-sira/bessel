@@ -171,7 +171,7 @@ fn spherical_k_neighbors(n: i32, x: f64) -> (f64, f64) {
 }
 /// Upward recurrence from the elementary j_0, j_1 or y_0, y_1 values. It is
 /// stable for y_n at every x > 0 and for j_n when x > n.
-fn upward(n: i32, x: f64, second: bool) -> f64 {
+fn upward_neighbors(n: i32, x: f64, second: bool) -> (f64, f64) {
     let (sin, cos) = x.sin_cos();
     let mut s0 = if second { -cos / x } else { sin / x };
     let mut s1 = if second {
@@ -187,13 +187,17 @@ fn upward(n: i32, x: f64, second: bool) -> f64 {
             break;
         }
     }
-    s1
+    (s0, s1)
+}
+
+fn upward(n: i32, x: f64, second: bool) -> f64 {
+    upward_neighbors(n, x, second).1
 }
 
 /// Continued fraction for j_(n-1)/j_n (or i_(n-1)/i_n), followed by Miller's
 /// downward recurrence normalized by the elementary order-zero/one values.
 /// Returns `None` if the fraction does not converge within its work limit.
-fn downward(n: i32, x: f64, modified: bool) -> Option<f64> {
+fn downward_neighbors(n: i32, x: f64, modified: bool) -> Option<(f64, f64)> {
     let s = if modified { 1.0 } else { -1.0 };
     let b = |k: i32| (2.0 * k as f64 + 1.0) / x;
     const TINY: f64 = 1e-300;
@@ -254,7 +258,14 @@ fn downward(n: i32, x: f64, modified: bool) -> Option<f64> {
         }
     };
     let value = scale * reference;
-    value.is_finite().then_some(value)
+    // The continued fraction already gives f_(n-1)/f_n. Retain that adjacent
+    // order for derivatives instead of repeating the fraction and the entire
+    // Miller recurrence. The value-only caller can ignore a nonfinite neighbor.
+    value.is_finite().then_some((g * value, value))
+}
+
+fn downward(n: i32, x: f64, modified: bool) -> Option<f64> {
+    downward_neighbors(n, x, modified).map(|(_, value)| value)
 }
 
 macro_rules! spherical {
@@ -275,6 +286,17 @@ macro_rules! spherical {
             else if $kind==3 && x>0.0 && x.is_finite() {
                 let (previous,current)=spherical_k_neighbors(n,x);
                 -previous-(n as f64+1.0)/x*current
+            }
+            else if $kind==0 && x>n as f64 && x.is_finite() {
+                let (previous,current)=upward_neighbors(n,x,false);
+                previous-(n as f64+1.0)/x*current
+            }
+            else if ($kind==0 || $kind==2) && x>0.0 && x<=700.0 && n<=256 {
+                if let Some((previous,current))=downward_neighbors(n,x,$kind==2).filter(|(previous,_)| previous.is_finite()) {
+                    previous-(n as f64+1.0)/x*current
+                } else {
+                    real(n-1,x,$kind)?-(n as f64+1.0)/x*real(n,x,$kind)?
+                }
             }
             else {
                 let previous=real(n-1,x,$kind)?;
