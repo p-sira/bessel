@@ -2,10 +2,15 @@
 
 ## 0.1
 
+### 0.1.2
+
+**Performance Improvements**
+- Bound merged `jnjnp_zeros` searches to avoid unnecessary roots while retaining an unbounded fallback; fast-path the exact origin-only case ([#6](https://github.com/p-sira/bessel/pull/6)). 
+- Reduce redundant work in Kelvin series, modified Bessel ratios/large-order K, spherical K derivatives, complex K integrals and integer-power integral recurrences ([#6](https://github.com/p-sira/bessel/pull/6)).
+
 ### 0.1.1
 
 **Performance Improvements**
-- Bound merged `jnjnp_zeros` searches to avoid unnecessary roots while retaining an unbounded fallback; fast-path the exact origin-only case. Reduce redundant work in Kelvin series, modified Bessel ratios/large-order K, spherical K derivatives, complex K integrals and integer-power integral recurrences. Preserve independent accuracy and old-algorithm regression checks.
 - `itstruve0`: Restore the moderate-large-argument Chebyshev/Clenshaw fast path to avoid expensive quadrature ([#4](https://github.com/p-sira/bessel/pull/4)).
 - `kv`, `kve`: Extend the reduced-order K recurrence to well-conditioned orders below one, eliminating quadrature in common fractional-order cases ([#4](https://github.com/p-sira/bessel/pull/4)).
 - `hankel1`, `hankel2`, `hankel1e`, `hankel2e`: Evaluate the exact order-3/2 closed form for positive real arguments within a bounded range ([#4](https://github.com/p-sira/bessel/pull/4)).
