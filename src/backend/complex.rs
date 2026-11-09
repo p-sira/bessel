@@ -134,15 +134,25 @@ fn series(nu: C, z: C, modified: bool) -> Result<C, Error> {
     let mut term = (nu * u.ln()).exp() * inv_gamma(nu + ONE);
     let mut sum = term;
     let mut converged = false;
+    let real_order = nu.im == 0.0;
     // The threshold on k prevents a premature return when the early terms
     // are tiny but grow before reaching their eventual maximum.
     let minimum = (z.norm() * 0.6).ceil() as usize + 5;
     for k in 1..=MAX_SERIES {
-        let divisor = C::new(k as f64, 0.0) * (nu + k as f64);
-        if divisor == ZERO {
-            return Err(Error::ConvergenceFailure);
+        let kf = k as f64;
+        if real_order {
+            let divisor = kf * (nu.re + kf);
+            if divisor == 0.0 {
+                return Err(Error::ConvergenceFailure);
+            }
+            term *= t / divisor;
+        } else {
+            let divisor = C::new(kf, 0.0) * (nu + kf);
+            if divisor == ZERO {
+                return Err(Error::ConvergenceFailure);
+            }
+            term *= t / divisor;
         }
-        term *= t / divisor;
         sum += term;
         if !finite(term) || !finite(sum) {
             return Err(Error::Overflow);
@@ -481,8 +491,11 @@ const GL16_W: [f64; 8] = [
 fn k_integrand(t: f64, v: f64, z: C) -> C {
     // exp(z) K_v(z) = 1/2 integral_0^inf
     //    [exp(-z(cosh(t)-1)+vt)+exp(-z(cosh(t)-1)-vt)] dt.
-    let exponent = -z * (t.cosh() - 1.0);
-    ((exponent + v * t).exp() + (exponent - v * t).exp()) * 0.5
+    // Combine the two real shifts before taking the complex exponential.
+    // This avoids a second complex exp and never forms cosh(v*t), which can
+    // overflow while the full decaying integrand is still representable.
+    let shift = v.abs() * t;
+    (-z * (t.cosh() - 1.0) + shift).exp() * (0.5 * (1.0 + (-2.0 * shift).exp()))
 }
 
 fn k_integral(v: f64, z: C) -> Result<C, Error> {
@@ -925,5 +938,62 @@ pub(crate) fn cylindrical(
         Kind::K => k_general(v, z, scaled),
         Kind::Hankel1 => hankel(v, z, true, scaled),
         Kind::Hankel2 => hankel(v, z, false, scaled),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{C, FRAC_PI_2, k_integral, k_integrand};
+
+    #[test]
+    fn symmetric_k_integrand_matches_two_exponentials() {
+        for z in [C::new(2.0, 0.5), C::new(0.2, 8.0), C::new(5.0, -4.0)] {
+            for v in [0.0, 0.5, 7.25] {
+                for t in [0.0_f64, 0.1, 0.5, 1.0, 2.0, 4.0, 6.0] {
+                    let exponent = -z * (t.cosh() - 1.0);
+                    let previous = ((exponent + v * t).exp() + (exponent - v * t).exp()) * 0.5;
+                    let actual = k_integrand(t, v, z);
+                    assert!(
+                        (actual - previous).norm() <= 2.0e-13 * previous.norm().max(1.0e-300),
+                        "z={z} v={v} t={t}: actual={actual}, previous={previous}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn real_order_series_divisor_matches_complex_division() {
+        for v in [-3.75, -0.5, 0.0, 1.0, 7.2] {
+            for z in [C::new(0.1, 0.0), C::new(1.0, 0.2), C::new(4.0, 2.0)] {
+                let t = -z * z * 0.25;
+                let mut original = C::new(1.0, 0.0);
+                let mut optimized = original;
+                for k in 1..=30 {
+                    let kf = k as f64;
+                    original *= t / (C::new(kf, 0.0) * (C::new(v, 0.0) + kf));
+                    optimized *= t / (kf * (v + kf));
+                    assert!(
+                        (optimized - original).norm() <= 3.0e-13 * original.norm().max(1.0e-300),
+                        "v={v} z={z} k={k}: optimized={optimized}, original={original}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scaled_k_quadrature_half_order() {
+        // exp(z) K_(1/2)(z) = sqrt(pi / (2z)) throughout Re(z) > 0.
+        // This independently checks the complex integral after combining
+        // the symmetric exponential terms in its integrand.
+        for z in [C::new(2.0, 0.5), C::new(5.0, 4.0)] {
+            let expected = (C::new(FRAC_PI_2, 0.0) / z).sqrt();
+            let actual = k_integral(0.5, z).expect("half-order K quadrature must converge");
+            assert!(
+                (actual - expected).norm() <= 3.0e-13 * expected.norm(),
+                "K_1/2({z}) = {actual}, expected {expected}"
+            );
+        }
     }
 }

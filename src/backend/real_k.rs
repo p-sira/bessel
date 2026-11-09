@@ -11,6 +11,11 @@ use core::f64::consts::FRAC_PI_2;
 #[inline]
 fn log_cosh(y: f64) -> f64 {
     let a = y.abs();
+    // log(1 + exp(-2a)) is below half an ulp of a for a >= 20.
+    // Quadrature at large order visits this region frequently.
+    if a >= 20.0 {
+        return a - core::f64::consts::LN_2;
+    }
     a + (-2.0 * a).exp().ln_1p() - core::f64::consts::LN_2
 }
 
@@ -280,17 +285,23 @@ pub(crate) fn kv(v: f64, x: f64, scaled: bool) -> f64 {
     // is v*tanh(vt)-x*sinh(t), with an interior maximum when v²>x.
     // Subtract its value before exponentiation to keep the quadrature scaled.
     let mode = if v > x.sqrt() {
-        let mut low = 0.0;
         let mut high = (v / x).asinh();
-        for _ in 0..60 {
-            let mid = low + (high - low) * 0.5;
-            if v * (v * mid).tanh() > x * mid.sinh() {
-                low = mid;
-            } else {
-                high = mid;
+        // Once v*t >= 32, tanh(v*t) rounds to 1 and the saddle is
+        // asinh(v/x) at binary64 precision. Avoid 60 transcendental
+        // evaluations for large-order quadrature.
+        if v * high < 32.0 {
+            let mut low = 0.0;
+            for _ in 0..60 {
+                let mid = low + (high - low) * 0.5;
+                if v * (v * mid).tanh() > x * mid.sinh() {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
             }
+            high = low + (high - low) * 0.5;
         }
-        low + (high - low) * 0.5
+        high
     } else {
         0.0
     };
@@ -331,7 +342,36 @@ pub(crate) fn kv(v: f64, x: f64, scaled: bool) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::kv;
+    use super::{kv, log_cosh};
+
+    #[test]
+    fn large_log_cosh_matches_direct_expression() {
+        for y in [20.0_f64, 32.0, 100.0, 1e6, 1e200] {
+            let a = y.abs();
+            let direct = a + (-2.0 * a).exp().ln_1p() - core::f64::consts::LN_2;
+            assert_eq!(log_cosh(y).to_bits(), direct.to_bits());
+            assert_eq!(log_cosh(-y).to_bits(), direct.to_bits());
+        }
+    }
+
+    #[test]
+    fn general_quadrature_matches_high_precision_with_and_without_saddle_shortcut() {
+        // Independently computed with mpmath at 75 decimal digits. The
+        // large-order cases hit the saddle shortcut, while (35.25,400)
+        // retains the bisection path.
+        for (v, x, expected) in [
+            (40.25, 30.0, 5_838_319_055.265_112),
+            (70.25, 1.0, 9.398_380_971_653_315e119),
+            (80.25, 80.0, 2_497_200_778_473_931.5),
+            (35.25, 400.0, 0.295_235_606_351_876_1),
+        ] {
+            let actual = kv(v, x, true);
+            assert!(
+                (actual / expected - 1.0).abs() < 2e-10,
+                "kve({v},{x})={actual:e}, mpmath={expected:e}"
+            );
+        }
+    }
 
     #[test]
     fn half_integer_closed_forms() {

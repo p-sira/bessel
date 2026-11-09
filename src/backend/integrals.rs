@@ -499,12 +499,9 @@ pub(crate) fn ittjya(mut x: f64, ttj: &mut [f64], tty: &mut [f64]) {
                         while (k <= 14) {
                             {
                                 r = ((((((-0.0078125f64) * r)
-                                    * (vt
-                                        - ((4.0f64 * ((k) as f64)) - 3.0f64)
-                                            .powf(((2) as f64))))
+                                    * (vt - ((4.0f64 * ((k) as f64)) - 3.0f64).powi(2)))
                                     / (x * ((k) as f64)))
-                                    * (vt
-                                        - ((4.0f64 * ((k) as f64)) - 1.0f64).powf(((2) as f64))))
+                                    * (vt - ((4.0f64 * ((k) as f64)) - 1.0f64).powi(2)))
                                     / (((2.0f64 * ((k) as f64)) - 1.0f64) * x));
                                 px += r;
                                 if ((r).abs() < ((px).abs() * 1.0e-12f64)) {
@@ -524,12 +521,9 @@ pub(crate) fn ittjya(mut x: f64, ttj: &mut [f64], tty: &mut [f64]) {
                         while (k <= 14) {
                             {
                                 r = ((((((-0.0078125f64) * r)
-                                    * (vt
-                                        - ((4.0f64 * ((k) as f64)) - 1.0f64)
-                                            .powf(((2) as f64))))
+                                    * (vt - ((4.0f64 * ((k) as f64)) - 1.0f64).powi(2)))
                                     / (x * ((k) as f64)))
-                                    * (vt
-                                        - ((4.0f64 * ((k) as f64)) + 1.0f64).powf(((2) as f64))))
+                                    * (vt - ((4.0f64 * ((k) as f64)) + 1.0f64).powi(2)))
                                     / (((2.0f64 * ((k) as f64)) + 1.0f64) * x));
                                 qx += r;
                                 if ((r).abs() < ((qx).abs() * 1.0e-12f64)) {
@@ -614,7 +608,7 @@ pub(crate) fn itth0(mut x: f64) -> f64 {
             while (k < 61) {
                 {
                     r = (((((-r) * x) * x) * ((2.0f64 * ((k) as f64)) - 1.0f64))
-                        / ((2.0f64 * ((k) as f64)) + 1.0f64).powf(((3) as f64)));
+                        / ((2.0f64 * ((k) as f64)) + 1.0f64).powi(3));
                     s += r;
                     if ((r).abs() < ((s).abs() * 1.0e-12f64)) {
                         {
@@ -634,7 +628,7 @@ pub(crate) fn itth0(mut x: f64) -> f64 {
             k = 1;
             while (k < 11) {
                 {
-                    r = (((-r) * ((2.0f64 * ((k) as f64)) - 1.0f64).powf(((3) as f64)))
+                    r = (((-r) * ((2.0f64 * ((k) as f64)) - 1.0f64).powi(3))
                         / ((((2.0f64 * ((k) as f64)) + 1.0f64) * x) * x));
                     s += r;
                     if ((r).abs() < ((s).abs() * 1.0e-12f64)) {
@@ -701,7 +695,7 @@ pub(crate) fn itsl0(mut x: f64) -> f64 {
                         }
                     }
                     r = ((((r * rd) * ((k) as f64)) / (((k) as f64) + 1.0f64))
-                        * (x / ((2.0f64 * ((k) as f64)) + 1.0f64)).powf(((2) as f64)));
+                        * (x / ((2.0f64 * ((k) as f64)) + 1.0f64)).powi(2));
                     s += r;
                     if ((r / s).abs() < 1.0e-12f64) {
                         {
@@ -723,7 +717,7 @@ pub(crate) fn itsl0(mut x: f64) -> f64 {
             while (k < 11) {
                 {
                     r = (((r * ((k) as f64)) / (((k) as f64) + 1.0f64))
-                        * (((2.0f64 * ((k) as f64)) + 1.0f64) / x).powf(((2) as f64)));
+                        * (((2.0f64 * ((k) as f64)) + 1.0f64) / x).powi(2));
                     s += r;
                     if ((r / s).abs() < 1.0e-12f64) {
                         {
@@ -746,7 +740,7 @@ pub(crate) fn itsl0(mut x: f64) -> f64 {
                     af = (((((1.5f64 * (((k) as f64) + 0.50f64))
                         * (((k) as f64) + (5.0f64 / 6.0f64)))
                         * a1)
-                        - (((0.5f64 * (((k) as f64) + 0.5f64).powf(((2) as f64)))
+                        - (((0.5f64 * (((k) as f64) + 0.5f64).powi(2))
                             * (((k) as f64) - 0.5f64))
                             * a0))
                         / (((k) as f64) + 1.0f64));

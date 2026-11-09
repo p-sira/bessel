@@ -328,7 +328,7 @@ mod zeros {
             .unwrap_or(0)
     }
 
-    #[divan::bench(args = [10, 64, 128])]
+    #[divan::bench(args = [1, 10, 64, 128])]
     fn jnjnp_zeros(nt: usize) -> usize {
         bessel::jnjnp_zeros(black_box(nt))
             .map(|z| z[0].len())
