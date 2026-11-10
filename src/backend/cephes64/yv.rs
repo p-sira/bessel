@@ -104,6 +104,9 @@ pub fn yv(v: f64, x: f64) -> f64 {
         //sf_error("yv", SF_ERROR_DOMAIN, NULL);
         f64::NAN
     } else {
+        if let Some((_, y)) = super::half_integer::jy(v, x) {
+            return y;
+        }
         if x > 0.0 && x <= 1e-6 && v.is_finite() {
             if (v - v.round()).abs() < 1e-5 {
                 return small_near_integer(v, x);

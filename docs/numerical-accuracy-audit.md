@@ -98,3 +98,25 @@ cancellation. Reproduce the benchmark selection with:
 cargo bench --bench bessel -- 'cylindrical_real_order::(jv|yv)' \
   'derivatives::jvp' 'hankel::' --sample-count 300 --min-time 0.2
 ```
+
+## Half-integer derivative performance (0.1.3 candidate)
+
+The Sci `yvp`, `h1vp`, and `h2vp` regressions exercise 32 uniformly spaced
+arguments in `[0.5, 20]`, with order `1.5` and derivative order `2`.
+Half-integer J/Y have elementary initial values at `±1/2`; an upward recurrence
+avoids repeated cancellation-sensitive J series for `|v| <= 64.5` when
+`x >= |v|`. Other inputs retain the general kernels and their extended-precision
+safeguards. Independent 100-digit mpmath references cover 496 J/Y and derivative
+values, including nonbenchmark orders, switch boundaries, near zeros, large
+arguments, and the full Sci grid.
+
+Matched same-core release measurements (microseconds per 32-point sweep):
+
+| Sci benchmark | 0.1.1 baseline | 0.1.2 | 0.1.3 candidate |
+| --- | ---: | ---: | ---: |
+| `yvp` | 19.68 | 23.23 | 4.67 |
+| `h1vp` | 39.53 | 45.93 | 10.77 |
+| `h2vp` | 36.99 | 43.88 | 8.49 |
+
+These are local diagnostic timings, not CodSpeed results. The new Bessel
+benchmarks `derivatives::{yvp,h1vp,h2vp}_sci_grid` retain this workload.
