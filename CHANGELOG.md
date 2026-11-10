@@ -2,9 +2,7 @@
 
 ## 0.1.2
 
-### Fixes
-
-The following bugs also affect 0.1.1.
+### Bug Fixes
 
 - Fix tiny-argument J underflow and parity, power-series cancellation, and fractional-order J/Y reflection overflow and precision loss ([#7](https://github.com/p-sira/bessel/pull/7)).
 - Preserve finite spherical I values and derivatives when their scaled intermediates underflow ([#7](https://github.com/p-sira/bessel/pull/7)).
