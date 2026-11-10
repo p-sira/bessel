@@ -6,6 +6,7 @@ fn cbrt(x: f64) -> f64 {
 }
 mod sinpi;
 pub use sinpi::{cospi, sinpi};
+mod half_integer;
 mod polevl;
 pub use polevl::{p1evl, polevl};
 mod chbevl;

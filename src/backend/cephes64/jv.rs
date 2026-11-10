@@ -70,6 +70,10 @@ pub fn jv(n: f64, x: f64) -> f64 {
         return f64::INFINITY / gamma(n + 1.0);
     }
 
+    if let Some((j, _)) = super::half_integer::jy(n, x) {
+        return sign as f64 * j;
+    }
+
     // Backward recurrence across zero is unstable for negative fractional
     // orders and can overflow its normalization. Reflect through positive
     // orders, using Y's stable dominant recurrence instead.

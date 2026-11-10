@@ -163,6 +163,13 @@ mod cylindrical_real_order {
 mod derivatives {
     use super::*;
 
+    // Same 32-point derivative workload as Sci's special.rs benchmarks.
+    fn sci_derivative_grid(f: impl Fn(f64) -> f64) -> f64 {
+        (0..32)
+            .map(|i| f(black_box(0.5 + 19.5 * i as f64 / 31.0)))
+            .sum()
+    }
+
     #[divan::bench(args = [1, 4])]
     fn jvp(n: u32) -> f64 {
         sweep_order(|v, x| bessel::jvp(v, x, n))
@@ -171,6 +178,27 @@ mod derivatives {
     #[divan::bench(args = [1, 4])]
     fn kvp(n: u32) -> f64 {
         sweep_order(|v, x| bessel::kvp(v, x, n))
+    }
+
+    #[divan::bench]
+    fn yvp_sci_grid() -> f64 {
+        sci_derivative_grid(|x| bessel::yvp(1.5, x, 2))
+    }
+
+    #[divan::bench]
+    fn h1vp_sci_grid() -> f64 {
+        sci_derivative_grid(|x| {
+            let z = bessel::h1vp(1.5, x, 2);
+            z.re + z.im
+        })
+    }
+
+    #[divan::bench]
+    fn h2vp_sci_grid() -> f64 {
+        sci_derivative_grid(|x| {
+            let z = bessel::h2vp(1.5, x, 2);
+            z.re + z.im
+        })
     }
 }
 

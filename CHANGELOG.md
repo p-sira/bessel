@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3
+
+### Performance
+
+- Evaluate half-integer cylindrical J and Y in the oscillatory region using the stable spherical recurrence, reducing the cost of Bessel and Hankel derivatives while preserving the general kernels for other inputs.
+- Add broad high-precision references for positive and negative half-integer orders, recurrence boundaries, and derivative orders.
+
 ## 0.1.2
 
 ### Bug Fixes
