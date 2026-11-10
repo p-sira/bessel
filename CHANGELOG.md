@@ -4,8 +4,11 @@
 
 ### Performance
 
-- Evaluate half-integer cylindrical J and Y in the oscillatory region using the stable spherical recurrence, reducing the cost of Bessel and Hankel derivatives while preserving the general kernels for other inputs.
-- Add broad high-precision references for positive and negative half-integer orders, recurrence boundaries, and derivative orders.
+- `yvp`, `h1vp`, `h2vp`: Evaluate half-integer cylindrical J and Y in the oscillatory region using the stable spherical recurrence ([#8](https://github.com/p-sira/bessel/pull/8)).
+
+**Testing**
+
+- Add broad high-precision references for positive and negative half-integer orders, recurrence boundaries, and derivative orders ([#8](https://github.com/p-sira/bessel/pull/8)).
 
 ## 0.1.2
 
@@ -20,7 +23,7 @@
 
 - Speed up `jnjnp_zeros` by avoiding unnecessary root searches ([#6](https://github.com/p-sira/bessel/pull/6)).
 - Reduce redundant computation in Kelvin functions, modified Bessel ratios and large-order K, spherical K derivatives, and Bessel integrals ([#6](https://github.com/p-sira/bessel/pull/6)).
-- Speed up real K evaluation, spherical J/I derivatives, and complex Bessel series and recurrences  ([#6](https://github.com/p-sira/bessel/pull/6)).
+- Speed up real K evaluation, spherical J/I derivatives, and complex Bessel series and recurrences ([#6](https://github.com/p-sira/bessel/pull/6)).
 
 ## 0.1.1
 
