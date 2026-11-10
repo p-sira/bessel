@@ -10,6 +10,31 @@ use crate::backend::cephes64::jv::jv;
 use crate::backend::cephes64::yn::yn;
 use num_complex::Complex64;
 
+// A reflected result may fit even when the positive-order Y overflows.
+// Include its trigonometric multiplier in the recurrence seeds in that case.
+pub(crate) fn yv_scaled(v: f64, x: f64, scale: f64) -> f64 {
+    if scale == 0.0 {
+        return 0.0;
+    }
+    let value = yv(v, x);
+    if !value.is_infinite() || !(50.0..10000.0).contains(&v) {
+        return scale * value;
+    }
+    let n = v.floor() as usize;
+    let u = v - n as f64;
+    let mut previous = scale * yv(u, x);
+    let mut current = scale * yv(u + 1.0, x);
+    for k in 1..n {
+        let next = (2.0 * (u + k as f64) / x) * current - previous;
+        previous = current;
+        current = next;
+        if current.is_infinite() {
+            break;
+        }
+    }
+    current
+}
+
 /// Leading small-x Neumann terms for |v| < 1, evaluated with logarithms so
 /// even the least subnormal x does not round x/2 to zero.
 fn small_fractional(v: f64, x: f64) -> f64 {
@@ -87,20 +112,43 @@ pub fn yv(v: f64, x: f64) -> f64 {
                 return small_fractional(v, x);
             }
         }
+        if x > 0.0 && x.is_finite() && v.is_finite() && v.abs() >= 50.0 {
+            let a = v.abs();
+            let c = super::cospi(a);
+            if v < 0.0 && c == 0.0 {
+                return super::sinpi(a) * jv(a, x);
+            }
+            // Reflect only after evaluating the positive-order solution.
+            // Do not retry via negative J on failure: J itself uses this Y
+            // recurrence, and the retry would recurse indefinitely.
+            let y = match crate::backend::complex::cylindrical(
+                crate::backend::complex::Kind::Y,
+                a,
+                Complex64::new(x, 0.0),
+                false,
+            ) {
+                Ok(value) => value.re,
+                Err(crate::backend::KernelError::Overflow) if x < a => f64::NEG_INFINITY,
+                Err(_) => return f64::NAN,
+            };
+            return if v < 0.0 {
+                let reflected = if y.is_infinite() {
+                    yv_scaled(a, x, c)
+                } else {
+                    c * y
+                };
+                reflected + super::sinpi(a) * jv(a, x)
+            } else {
+                y
+            };
+        }
         // The reflection formula below loses all significant digits when
         // sin(pi*v) is tiny: J_v and J_-v nearly cancel. The native complex
         // kernel evaluates the removable integer-order limit by a stable
         // contour formula. Supply an infinitesimal imaginary component to
         // bypass its real Cephes fast path (which calls this function).
         //
-        // Cephes J_v also rejects negative noninteger orders of magnitude
-        // >= 500, making the reflection formula NaN for otherwise ordinary
-        // Y_v values. The native kernel uses stable order recurrence there.
-        if x > 0.0
-            && x.is_finite()
-            && v.is_finite()
-            && ((v - v.round()).abs() < 1e-5 || v.abs() >= 500.0)
-        {
+        if x > 0.0 && x.is_finite() && v.is_finite() && (v - v.round()).abs() < 1e-5 {
             let imaginary = (x * f64::EPSILON).max(f64::from_bits(1));
             if let Ok(value) = crate::backend::complex::cylindrical(
                 crate::backend::complex::Kind::Y,

@@ -111,8 +111,15 @@ fn real(n: i32, x: f64, kind: u8) -> Result<f64, StrErr> {
     }
     let order = n as f64 + 0.5;
     if kind == 2 {
-        let value = crate::backend::cyl_bessel_ie(order, x)?;
         let prefactor = (core::f64::consts::FRAC_PI_2 / x).sqrt();
+        // At large order, exp(-x) I_(n+1/2) can underflow even though
+        // i_n is representable. The unscaled kernel combines its exponent
+        // before rounding; retain the scaled path if I itself overflows.
+        let value = crate::backend::cyl_bessel_i(order, x)?;
+        if value.is_finite() {
+            return Ok(sign * prefactor * value);
+        }
+        let value = crate::backend::cyl_bessel_ie(order, x)?;
         let e = (0.5 * x).exp();
         return Ok(sign * (prefactor * value * e) * e);
     }
@@ -376,14 +383,16 @@ fn series_derivative(n: i32, x: f64, modified: bool) -> f64 {
     let mut term = if n == 0 {
         if modified { x / 3.0 } else { -x / 3.0 }
     } else {
-        let mut base = 1.0 / (2.0 * n as f64 + 1.0);
+        // Include n before the product: the derivative can be representable
+        // even when its value divided by n has already underflowed.
+        let mut base = n as f64 / (2.0 * n as f64 + 1.0);
         for k in 1..n {
             base *= x / (2.0 * k as f64 + 1.0);
             if base == 0.0 {
                 return 0.0;
             }
         }
-        base * n as f64
+        base
     };
     let mut sum = term;
     let square = if modified { x * x } else { -x * x };

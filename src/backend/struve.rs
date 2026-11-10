@@ -166,6 +166,12 @@ fn struve(v: f64, x: f64, modified: bool) -> Result<f64, StrErr> {
             0.0
         });
     }
+    if !modified && v == 0.5 {
+        // DLMF 11.4.5: H_(1/2)(x) = sqrt(2/(pi*x)) (1-cos(x)).
+        // The half-angle form retains accuracy near every even multiple of pi.
+        let sine = (0.5 * x).sin();
+        return Ok((2.0 / PI).sqrt() / x.sqrt() * sine * (2.0 * sine));
+    }
     let mut best: Option<Estimate> = None;
     // Lazy candidates avoid evaluating expensive Bessel series when an earlier
     // expansion already meets the requested accuracy.

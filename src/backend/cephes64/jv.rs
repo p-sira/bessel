@@ -16,6 +16,7 @@ use crate::backend::cephes64::gamma::{gamma, lgam_sgn};
 use crate::backend::cephes64::j0::j0;
 use crate::backend::cephes64::j1::j1;
 use crate::backend::cephes64::polevl::polevl;
+use crate::backend::double_double::Dd;
 use crate::backend::utils::frexp;
 
 const MAXGAM: f64 = 171.624376956302725;
@@ -69,11 +70,21 @@ pub fn jv(n: f64, x: f64) -> f64 {
         return f64::INFINITY / gamma(n + 1.0);
     }
 
+    // Backward recurrence across zero is unstable for negative fractional
+    // orders and can overflow its normalization. Reflect through positive
+    // orders, using Y's stable dominant recurrence instead.
+    if n < -50.0 && x > 0.0 {
+        return crate::backend::cephes64::cospi(an) * jv(an, x)
+            - crate::backend::cephes64::yv::yv_scaled(an, x, crate::backend::cephes64::sinpi(an));
+    }
+
     y = x.abs();
 
     if y * y < (n + 1.0).abs() * MACHEP {
         // case 7
-        return (0.5 * x).powf(n) / gamma(n + 1.0);
+        let mut gamma_sign = 0;
+        let logarithm = n * (y.ln() - core::f64::consts::LN_2) - lgam_sgn(n + 1.0, &mut gamma_sign);
+        return (sign * gamma_sign) as f64 * logarithm.exp();
     }
 
     let mut k = 3.6 * y.sqrt();
@@ -204,17 +215,6 @@ pub fn jv(n: f64, x: f64) -> f64 {
          * But if x is of the order of n**2, these may blow up, whereas the
          * Hankel expansion will then work.
          */
-        if n < 0.0 {
-            // case 31
-            // Cephes does not provide a negative-fractional-order uniform
-            // expansion. Reflect through positive orders, where both J and
-            // Y have stable large-order kernels. This branch is restricted
-            // to n <= -500; ordinary J calls retain their existing path.
-            // Y_a's large-order path uses the native complex recurrence,
-            // rather than calling back into negative-order real J.
-            return crate::backend::cephes64::cospi(an) * jv(an, x)
-                - crate::backend::cephes64::sinpi(an) * crate::backend::cephes64::yv(an, x);
-        }
         t = x / n;
         t /= n;
         if t > 0.3 {
@@ -381,16 +381,36 @@ fn jvs_scaled(n: f64, x: f64, scale: f64) -> f64 {
     let z = -x * x / 4.0;
     let mut u = 1.0;
     let mut y = u;
+    let mut peak: f64 = 1.0;
     let mut k = 1.0;
     let mut t = 1.0;
 
     while t > MACHEP {
         u *= z / (k * (n + k));
         y += u;
+        peak = peak.max(u.abs());
         k += 1.0;
         if y != 0.0 {
             t = (u / y).abs();
         }
+    }
+    // Ordinary binary64 is sufficient for well-conditioned sums. Retry only
+    // when cancellation amplifies term rounding by more than five decades.
+    if peak > 1e5 * y.abs() || !y.is_finite() {
+        let half = Dd::from(0.5 * x);
+        let z = -(half * half);
+        let mut u = Dd::from(1.0);
+        let mut sum = u;
+        let mut k = 1.0;
+        loop {
+            u = (u * z).div_dd(Dd::from(k) * (Dd::from(n) + Dd::from(k)));
+            sum = sum + u;
+            if u.hi.abs() <= MACHEP * sum.hi.abs() || !sum.hi.is_finite() {
+                break;
+            }
+            k += 1.0;
+        }
+        y = sum.hi;
     }
 
     let (_, mut ex) = frexp(0.5 * x);
