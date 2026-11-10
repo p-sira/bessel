@@ -378,22 +378,40 @@ fn jvs(n: f64, x: f64) -> f64 {
 fn jvs_scaled(n: f64, x: f64, scale: f64) -> f64 {
     let mut sgngam: isize = 0; // Value doesn't matter, will be overwritten
 
-    let half = Dd::from(0.5 * x);
-    let z = -(half * half);
-    let mut u = Dd::from(1.0);
+    let z = -x * x / 4.0;
+    let mut u = 1.0;
     let mut y = u;
+    let mut peak: f64 = 1.0;
     let mut k = 1.0;
     let mut t = 1.0;
 
     while t > MACHEP {
-        u = u * z / (Dd::from(k) * (Dd::from(n) + Dd::from(k)));
-        y = y + u;
+        u *= z / (k * (n + k));
+        y += u;
+        peak = peak.max(u.abs());
         k += 1.0;
-        if y.hi != 0.0 {
-            t = (u.hi / y.hi).abs();
+        if y != 0.0 {
+            t = (u / y).abs();
         }
     }
-    let mut y = y.hi;
+    // Ordinary binary64 is sufficient for well-conditioned sums. Retry only
+    // when cancellation amplifies term rounding by more than five decades.
+    if peak > 1e5 * y.abs() || !y.is_finite() {
+        let half = Dd::from(0.5 * x);
+        let z = -(half * half);
+        let mut u = Dd::from(1.0);
+        let mut sum = u;
+        let mut k = 1.0;
+        loop {
+            u = (u * z).div_dd(Dd::from(k) * (Dd::from(n) + Dd::from(k)));
+            sum = sum + u;
+            if u.hi.abs() <= MACHEP * sum.hi.abs() || !sum.hi.is_finite() {
+                break;
+            }
+            k += 1.0;
+        }
+        y = sum.hi;
+    }
 
     let (_, mut ex) = frexp(0.5 * x);
     ex = (ex as f64 * n) as i32;

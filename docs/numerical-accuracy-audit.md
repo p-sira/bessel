@@ -26,7 +26,7 @@ accuracy guarantee.
 | Issue | Example before the fix | Fix |
 | --- | --- | --- |
 | Tiny-argument J loses the argument or parity | `J_0.5(2^-1074)` returns zero; `J_3(-1e-10)` has the wrong sign | Evaluate the leading term using log-gamma, preserve parity, and avoid forming `x/2` |
-| J series cancellation | `J_283.8627249559925(135.55386283898832)` has relative error about `1.4e-8` | Use the existing double-double arithmetic for terms and accumulation |
+| J series cancellation | `J_283.8627249559925(135.55386283898832)` has relative error about `1.4e-8` | Retry cancellation-heavy sums using the existing double-double arithmetic for terms and accumulation |
 | Fractional-order J/Y reflection overflows or loses precision | `Y_295.60954413659204(65.40689047242715)` returns NaN instead of about `-3.25e154`; negative J has similar failures | Use stable positive-order Y recurrence above order 50 and reflect afterward; include the reflection coefficient in recurrence seeds when unmultiplied Y overflows |
 | Spherical I loses a finite result through scaled underflow | `i_500(100)` returns zero instead of about `1.41e-284`; its derivative also returns zero | Prefer the native unscaled I kernel, retaining the scaled fallback when cylindrical I overflows |
 | Spherical derivatives underflow before multiplication by the order | `i_68'(0.0011338333600859067)` loses subnormal precision | Include the order in the leading derivative coefficient before the product |
@@ -66,6 +66,35 @@ functions, Airy, Kelvin, integrals, zeros, ratios, and binary32 conversion.
 This audit adds targeted coverage to those suites; it does not establish a
 uniform error bound for every public API over all binary64 inputs. In
 particular, the documented cancellation limitation of `besselpoly` at large
-arguments remains outside the fixes here. Double-double J series evaluation
-adds arithmetic work; this change prioritizes accuracy and does not claim a
-performance improvement.
+arguments remains outside the fixes here. The J series retries in double-double precision only when the largest term
+exceeds the final sum's magnitude by more than `1e5`. This keeps ordinary
+inputs on the binary64 path while retaining the accuracy regressions.
+
+## Performance investigation
+
+The initial PR revision (`dcab5e9`) used double-double arithmetic for every J
+series. CodSpeed reported seven regressions of 42–51% efficiency, along with
+a warning that base and head ran on different hardware. Local measurements
+on the same machine confirmed a real slowdown across all seven paths.
+
+After making extended precision conditional on cancellation, median local
+wall times changed as follows (microseconds per benchmark sweep):
+
+| Benchmark | Main (`f8ddffb`) | Initial PR | Conditional retry |
+| --- | ---: | ---: | ---: |
+| `jv` | 2.909 | 10.43 | 3.029 |
+| `jv_f32` | 2.898 | 10.40 | 3.002 |
+| `yv` | 4.873 | 17.34 | 4.995 |
+| `jvp[1]` | 5.665 | 21.59 | 6.014 |
+| `jvp[4]` | 17.00 | 56.08 | 17.59 |
+| `hankel1` | 8.826 | 28.86 | 9.114 |
+| `hankel2e` | 9.585 | 29.54 | 9.838 |
+
+These local timings are diagnostic measurements, not CodSpeed simulation
+results. The remaining local overhead is about 2–6%, including the check for
+cancellation. Reproduce the benchmark selection with:
+
+```sh
+cargo bench --bench bessel -- 'cylindrical_real_order::(jv|yv)' \
+  'derivatives::jvp' 'hankel::' --sample-count 300 --min-time 0.2
+```
