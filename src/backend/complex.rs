@@ -49,6 +49,20 @@ fn checked(value: C) -> Result<C, Error> {
     }
 }
 
+/// Compare relative magnitudes without a square root in the usual range.
+/// Fall back to hypot when squaring would overflow or underflow, since both
+/// can occur for representable complex Bessel values.
+#[inline]
+fn relatively_small(value: C, reference: C, tolerance: f64) -> bool {
+    let value_sq = value.norm_sqr();
+    let reference_sq = reference.norm_sqr();
+    if value_sq > 0.0 && value_sq.is_finite() && reference_sq > 0.0 && reference_sq.is_finite() {
+        value_sq <= tolerance * tolerance * reference_sq
+    } else {
+        value.norm() <= tolerance * reference.norm()
+    }
+}
+
 /// Apply an exponential scale in polar form, so an intermediate exp(±Re z)
 /// need not overflow or underflow while the final Bessel value is finite.
 fn restore_scale(value: C, log_scale: f64, phase: f64) -> Result<C, Error> {
@@ -134,20 +148,30 @@ fn series(nu: C, z: C, modified: bool) -> Result<C, Error> {
     let mut term = (nu * u.ln()).exp() * inv_gamma(nu + ONE);
     let mut sum = term;
     let mut converged = false;
+    let real_order = nu.im == 0.0;
     // The threshold on k prevents a premature return when the early terms
     // are tiny but grow before reaching their eventual maximum.
     let minimum = (z.norm() * 0.6).ceil() as usize + 5;
     for k in 1..=MAX_SERIES {
-        let divisor = C::new(k as f64, 0.0) * (nu + k as f64);
-        if divisor == ZERO {
-            return Err(Error::ConvergenceFailure);
+        let kf = k as f64;
+        if real_order {
+            let divisor = kf * (nu.re + kf);
+            if divisor == 0.0 {
+                return Err(Error::ConvergenceFailure);
+            }
+            term *= t / divisor;
+        } else {
+            let divisor = C::new(kf, 0.0) * (nu + kf);
+            if divisor == ZERO {
+                return Err(Error::ConvergenceFailure);
+            }
+            term *= t / divisor;
         }
-        term *= t / divisor;
         sum += term;
         if !finite(term) || !finite(sum) {
             return Err(Error::Overflow);
         }
-        if k > minimum && term.norm() <= 5.0e-16 * sum.norm() {
+        if k > minimum && relatively_small(term, sum, 5.0e-16) {
             converged = true;
             break;
         }
@@ -224,7 +248,13 @@ fn integer_second(n: usize, z: C, modified: bool) -> Result<C, Error> {
         next_sum += term / (kf + 1.0);
         harmonic_sum += harmonic * term;
         harmonic_derivative += kf * harmonic * term;
-        if k > 8 && term.norm() * (kf + 1.0) < 1e-17 * sum.norm().max(1e-250) {
+        if k > 8
+            && if sum.re.abs().max(sum.im.abs()) >= 1e-250 {
+                relatively_small(term * (kf + 1.0), sum, 1e-17)
+            } else {
+                term.norm() * (kf + 1.0) < 1e-17 * sum.norm().max(1e-250)
+            }
+        {
             break;
         }
     }
@@ -367,7 +397,8 @@ fn minimal_recurrence(v: f64, z: C, modified: bool, scaled: bool) -> Result<C, E
     if n == 0 {
         return Ok(base);
     }
-    let m = n.max(z.norm().ceil() as usize) + (8.0 * z.norm().sqrt()).ceil() as usize + 45;
+    let radius = z.norm();
+    let m = n.max(radius.ceil() as usize) + (8.0 * radius.sqrt()).ceil() as usize + 45;
     let mut higher = ZERO;
     let mut current = ONE;
     let mut target = ZERO;
@@ -395,7 +426,9 @@ fn minimal_recurrence(v: f64, z: C, modified: bool, scaled: bool) -> Result<C, E
         };
         higher = current;
         current = previous;
-        if current.norm() > 1e190 {
+        // A component bound avoids hypot on nearly every Miller step;
+        // only values approaching the rescaling threshold need it.
+        if current.re.abs().max(current.im.abs()) > 0.7e190 && current.norm() > 1e190 {
             current *= 1e-190;
             higher *= 1e-190;
             log_shift += 190.0 * std::f64::consts::LN_10;
@@ -481,8 +514,11 @@ const GL16_W: [f64; 8] = [
 fn k_integrand(t: f64, v: f64, z: C) -> C {
     // exp(z) K_v(z) = 1/2 integral_0^inf
     //    [exp(-z(cosh(t)-1)+vt)+exp(-z(cosh(t)-1)-vt)] dt.
-    let exponent = -z * (t.cosh() - 1.0);
-    ((exponent + v * t).exp() + (exponent - v * t).exp()) * 0.5
+    // Combine the two real shifts before taking the complex exponential.
+    // This avoids a second complex exp and never forms cosh(v*t), which can
+    // overflow while the full decaying integrand is still representable.
+    let shift = v.abs() * t;
+    (-z * (t.cosh() - 1.0) + shift).exp() * (0.5 * (1.0 + (-2.0 * shift).exp()))
 }
 
 fn k_integral(v: f64, z: C) -> Result<C, Error> {
@@ -605,7 +641,7 @@ fn k_cf2_base(u: f64, z: C) -> Option<(C, C)> {
         if !finite(sum) || !finite(f) {
             return None;
         }
-        if correction.norm() < f64::EPSILON * sum.norm() {
+        if relatively_small(correction, sum, f64::EPSILON) {
             let value = C::new(FRAC_PI_2.sqrt(), 0.0) / z.sqrt() / sum;
             let next = value * (0.5 + u + z + (u * u - 0.25) * f) / z;
             return (finite(value) && finite(next)).then_some((value, next));
@@ -925,5 +961,170 @@ pub(crate) fn cylindrical(
         Kind::K => k_general(v, z, scaled),
         Kind::Hankel1 => hankel(v, z, true, scaled),
         Kind::Hankel2 => hankel(v, z, false, scaled),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        C, FRAC_PI_2, integer_second, k_cf2, k_integral, k_integrand, minimal_recurrence,
+        relatively_small, series,
+    };
+
+    #[test]
+    fn relative_magnitude_avoids_square_overflow_and_underflow() {
+        for (value, reference, tolerance) in [
+            (C::new(3e-20, 4e-20), C::new(1.0, 0.0), 1e-15),
+            (C::new(3e-13, 4e-13), C::new(1.0, 0.0), 1e-15),
+            (C::new(1e180, 2e180), C::new(1e200, 0.0), 1e-15),
+            (C::new(1e185, 2e185), C::new(1e200, 0.0), 1e-15),
+            (C::new(1e-180, 2e-180), C::new(1e-150, 0.0), 1e-15),
+            (C::new(1e-160, 2e-160), C::new(1e-150, 0.0), 1e-15),
+            (C::new(0.0, 0.0), C::new(0.0, 0.0), 1e-15),
+        ] {
+            assert_eq!(
+                relatively_small(value, reference, tolerance),
+                value.norm() <= tolerance * reference.norm(),
+                "value={value}, reference={reference}, tolerance={tolerance}"
+            );
+        }
+    }
+
+    #[test]
+    fn series_and_integer_second_match_independent_complex_references() {
+        // Existing SciPy/AMOS principal-branch reference fixtures.
+        let z = C::new(0.1, 0.2);
+        for (modified, first, second) in [
+            (
+                false,
+                C::new(1.007_489_011_683_009, -0.010_037_519_074_414_627),
+                C::new(-1.032_758_893_332_859_8, 0.726_825_596_472_236_5),
+            ),
+            (
+                true,
+                C::new(0.992_489_113_245_512, 0.009_962_519_119_987_556),
+                C::new(1.605_190_278_067_505_8, -1.072_811_774_127_186),
+            ),
+        ] {
+            let actual_first = series(C::new(0.0, 0.0), z, modified).unwrap();
+            let actual_second = integer_second(0, z, modified).unwrap();
+            assert!((actual_first - first).norm() <= 2e-12 * first.norm());
+            assert!((actual_second - second).norm() <= 2e-12 * second.norm());
+        }
+    }
+
+    #[test]
+    fn complex_miller_recurrence_matches_high_precision_series() {
+        // Reference J_n/I_n obtained with 135-digit decimal arithmetic,
+        // summing (±z²/4)^k / (k! (n+k)!) independently of the Rust kernel.
+        for (n, z, j, i) in [
+            (
+                12.0,
+                C::new(5.0, 3.0),
+                C::new(0.000_540_954_955_589_743, -0.000_220_843_646_775_871_52),
+                C::new(0.000_777_770_564_927_974_8, 0.000_748_258_937_696_109_9),
+            ),
+            (
+                32.0,
+                C::new(20.0, 2.0),
+                C::new(-1.562_628_474_994_221_2e-5, 1.123_011_985_273_563_2e-5),
+                C::new(-0.006_547_270_039_648_27, -0.004_555_768_465_919_908),
+            ),
+            (
+                65.0,
+                C::new(45.0, 5.0),
+                C::new(2.258_355_110_229_756_7e-7, -3.899_348_265_306_197_5e-7),
+                C::new(-1.481_313_089_336_810_5, 1.214_519_189_047_832_6),
+            ),
+            (
+                100.0,
+                C::new(75.0, 10.0),
+                C::new(-2.329_067_757_719_836_4e-7, 1.494_048_596_384_477_5e-7),
+                C::new(-176_524.389_339_619_52, -205_449.542_293_182_08),
+            ),
+        ] {
+            for (modified, expected) in [(false, j), (true, i)] {
+                let actual = minimal_recurrence(n, z, modified, false).unwrap();
+                let relative = (actual - expected).norm() / expected.norm();
+                assert!(
+                    relative < 2e-8,
+                    "n={n} z={z} modified={modified}: actual={actual}, expected={expected}, rel={relative:e}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn complex_k_continued_fraction_matches_high_precision_reference() {
+        // mpmath 1.4.1, 75-digit working precision.
+        let z = C::new(10.0, 2.0);
+        for (v, expected) in [
+            (
+                0.0,
+                C::new(0.386_169_422_816_089_8, -0.037_379_986_717_081_34),
+            ),
+            (
+                7.25,
+                C::new(3.540_243_194_380_512_4, -2.037_369_669_112_786),
+            ),
+        ] {
+            let actual = k_cf2(v, z, true).expect("K continued fraction must converge");
+            assert!(
+                (actual - expected).norm() <= 3e-12 * expected.norm(),
+                "v={v}, z={z}, actual={actual}, expected={expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn symmetric_k_integrand_matches_two_exponentials() {
+        for z in [C::new(2.0, 0.5), C::new(0.2, 8.0), C::new(5.0, -4.0)] {
+            for v in [0.0, 0.5, 7.25] {
+                for t in [0.0_f64, 0.1, 0.5, 1.0, 2.0, 4.0, 6.0] {
+                    let exponent = -z * (t.cosh() - 1.0);
+                    let previous = ((exponent + v * t).exp() + (exponent - v * t).exp()) * 0.5;
+                    let actual = k_integrand(t, v, z);
+                    assert!(
+                        (actual - previous).norm() <= 2.0e-13 * previous.norm().max(1.0e-300),
+                        "z={z} v={v} t={t}: actual={actual}, previous={previous}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn real_order_series_divisor_matches_complex_division() {
+        for v in [-3.75, -0.5, 0.0, 1.0, 7.2] {
+            for z in [C::new(0.1, 0.0), C::new(1.0, 0.2), C::new(4.0, 2.0)] {
+                let t = -z * z * 0.25;
+                let mut original = C::new(1.0, 0.0);
+                let mut optimized = original;
+                for k in 1..=30 {
+                    let kf = k as f64;
+                    original *= t / (C::new(kf, 0.0) * (C::new(v, 0.0) + kf));
+                    optimized *= t / (kf * (v + kf));
+                    assert!(
+                        (optimized - original).norm() <= 3.0e-13 * original.norm().max(1.0e-300),
+                        "v={v} z={z} k={k}: optimized={optimized}, original={original}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scaled_k_quadrature_half_order() {
+        // exp(z) K_(1/2)(z) = sqrt(pi / (2z)) throughout Re(z) > 0.
+        // This independently checks the complex integral after combining
+        // the symmetric exponential terms in its integrand.
+        for z in [C::new(2.0, 0.5), C::new(5.0, 4.0)] {
+            let expected = (C::new(FRAC_PI_2, 0.0) / z).sqrt();
+            let actual = k_integral(0.5, z).expect("half-order K quadrature must converge");
+            assert!(
+                (actual - expected).norm() <= 3.0e-13 * expected.norm(),
+                "K_1/2({z}) = {actual}, expected {expected}"
+            );
+        }
     }
 }

@@ -658,43 +658,62 @@ pub fn jnjnp_zeros(nt: usize) -> Result<[Vec<f64>; 4]> {
     if !(1..=128).contains(&nt) {
         return Err(Error::InvalidInput("merged root count must be in 1..=128"));
     }
-    let mut entries: Vec<(f64, f64, f64, f64)> = vec![(0.0, 0.0, 0.0, 1.0)];
+    if nt == 1 {
+        return Ok([vec![0.0], vec![0.0], vec![0.0], vec![1.0]]);
+    }
     let cutoff = ((nt as f64) * 8.0).sqrt() + 4.0;
-    let mut limit = if nt == 1 { 0.0 } else { f64::INFINITY };
-    for n in 0..=cutoff.ceil() as u32 {
-        for (kind, flag) in [(RootKind::J, 0.0), (RootKind::JPrime, 1.0)] {
-            // Preserve candidates within the sorting tolerance so that equal
-            // J/J' roots retain the existing derivative-flag tie ordering.
-            for (index, x) in bessel_roots_bounded(n, nt, kind, limit + 2e-12)?
-                .into_iter()
-                .enumerate()
-            {
-                entries.push((x, f64::from(n), (index + 1) as f64, flag));
+    // The n=0 sequence alone gives an eventual upper bound of O(nt),
+    // but the merged sequences need only O(sqrt(nt)) positive arguments.
+    // Start with a smaller trial limit, falling back to the original
+    // unbounded search if it does not contain enough roots.
+    for initial_limit in [2.0 * (nt as f64).sqrt() + 3.0, f64::INFINITY] {
+        let mut entries: Vec<(f64, f64, f64, f64)> = vec![(0.0, 0.0, 0.0, 1.0)];
+        let mut limit = initial_limit;
+        for n in 0..=cutoff.ceil() as u32 {
+            if f64::from(n) >= limit + 2e-12 {
+                break;
             }
-            if entries.len() >= nt {
-                entries.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.3.total_cmp(&a.3)));
-                limit = limit.min(entries[nt - 1].0);
+            for (kind, flag) in [(RootKind::J, 0.0), (RootKind::JPrime, 1.0)] {
+                let previous_len = entries.len();
+                // Preserve candidates within the sorting tolerance so that equal
+                // J/J' roots retain the existing derivative-flag tie ordering.
+                for (index, x) in bessel_roots_bounded(n, nt, kind, limit + 2e-12)?
+                    .into_iter()
+                    .enumerate()
+                {
+                    entries.push((x, f64::from(n), (index + 1) as f64, flag));
+                }
+                if entries.len() >= nt && entries.len() != previous_len {
+                    entries.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.3.total_cmp(&a.3)));
+                    limit = limit.min(entries[nt - 1].0);
+                }
             }
         }
-    }
-    entries.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.3.total_cmp(&a.3)));
-    let mut start = 0;
-    while start < entries.len() {
-        let mut end = start + 1;
-        while end < entries.len() && (entries[end].0 - entries[start].0).abs() <= 1e-12 {
-            end += 1;
+        if entries.len() < nt {
+            continue;
         }
-        entries[start..end].sort_by(|a, b| a.3.total_cmp(&b.3));
-        start = end;
+        entries.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.3.total_cmp(&a.3)));
+        let mut start = 0;
+        while start < entries.len() {
+            let mut end = start + 1;
+            while end < entries.len() && (entries[end].0 - entries[start].0).abs() <= 1e-12 {
+                end += 1;
+            }
+            entries[start..end].sort_by(|a, b| a.3.total_cmp(&b.3));
+            start = end;
+        }
+        let mut out: [Vec<f64>; 4] = std::array::from_fn(|_| Vec::with_capacity(nt));
+        for (x, n, index, flag) in entries.into_iter().take(nt) {
+            out[0].push(x);
+            out[1].push(n);
+            out[2].push(index);
+            out[3].push(flag);
+        }
+        return Ok(out);
     }
-    let mut out: [Vec<f64>; 4] = std::array::from_fn(|_| Vec::with_capacity(nt));
-    for (x, n, index, flag) in entries.into_iter().take(nt) {
-        out[0].push(x);
-        out[1].push(n);
-        out[2].push(index);
-        out[3].push(flag);
-    }
-    Ok(out)
+    Err(Error::NumericalFailure(
+        "unable to bracket requested merged Bessel roots",
+    ))
 }
 
 /// Ratio `I_v(x)/I_(v-1)(x)`, using a scaled Perron continued fraction.
@@ -899,5 +918,91 @@ fn paired_integral(x: f64, evaluate: fn(f64, &mut [f64], &mut [f64]), odd: bool)
         (if odd { -a[0] } else { a[0] }, f64::NAN)
     } else {
         (a[0], b[0])
+    }
+}
+
+#[cfg(test)]
+mod merged_zero_tests {
+    use super::{Error, RootKind, bessel_roots_bounded, jnjnp_zeros};
+
+    // The previous implementation started from an unbounded search and
+    // narrowed the threshold after collecting enough candidates.
+    fn original_unbounded_search(nt: usize) -> [Vec<f64>; 4] {
+        let mut entries: Vec<(f64, f64, f64, f64)> = vec![(0.0, 0.0, 0.0, 1.0)];
+        let cutoff = ((nt as f64) * 8.0).sqrt() + 4.0;
+        let mut limit = if nt == 1 { 0.0 } else { f64::INFINITY };
+        for n in 0..=cutoff.ceil() as u32 {
+            for (kind, flag) in [(RootKind::J, 0.0), (RootKind::JPrime, 1.0)] {
+                for (index, x) in bessel_roots_bounded(n, nt, kind, limit + 2e-12)
+                    .unwrap()
+                    .into_iter()
+                    .enumerate()
+                {
+                    entries.push((x, f64::from(n), (index + 1) as f64, flag));
+                }
+                if entries.len() >= nt {
+                    entries.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.3.total_cmp(&a.3)));
+                    limit = limit.min(entries[nt - 1].0);
+                }
+            }
+        }
+        entries.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.3.total_cmp(&a.3)));
+        let mut start = 0;
+        while start < entries.len() {
+            let mut end = start + 1;
+            while end < entries.len() && (entries[end].0 - entries[start].0).abs() <= 1e-12 {
+                end += 1;
+            }
+            entries[start..end].sort_by(|a, b| a.3.total_cmp(&b.3));
+            start = end;
+        }
+        let mut out: [Vec<f64>; 4] = std::array::from_fn(|_| Vec::with_capacity(nt));
+        for (x, n, index, flag) in entries.into_iter().take(nt) {
+            out[0].push(x);
+            out[1].push(n);
+            out[2].push(index);
+            out[3].push(flag);
+        }
+        out
+    }
+
+    #[test]
+    fn shortened_search_matches_original_order_and_roots() {
+        for nt in [1, 2, 3, 10, 32, 64, 128] {
+            let expected = original_unbounded_search(nt);
+            let actual = jnjnp_zeros(nt).unwrap();
+            for component in 0..4 {
+                assert_eq!(actual[component].len(), nt);
+                for i in 0..nt {
+                    if component == 0 {
+                        assert!(
+                            (actual[0][i] - expected[0][i]).abs() <= 2e-12,
+                            "nt={nt}, root={i}: actual={}, expected={}",
+                            actual[0][i],
+                            expected[0][i]
+                        );
+                    } else {
+                        assert_eq!(
+                            actual[component][i], expected[component][i],
+                            "nt={nt}, component={component}, root={i}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn merged_zero_input_errors_are_unchanged() {
+        for nt in [0, 129, usize::MAX] {
+            assert_eq!(
+                jnjnp_zeros(nt),
+                Err(Error::InvalidInput("merged root count must be in 1..=128"))
+            );
+        }
+        assert_eq!(
+            jnjnp_zeros(1).unwrap(),
+            [vec![0.0], vec![0.0], vec![0.0], vec![1.0]]
+        );
     }
 }

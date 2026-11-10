@@ -11,6 +11,11 @@ use core::f64::consts::FRAC_PI_2;
 #[inline]
 fn log_cosh(y: f64) -> f64 {
     let a = y.abs();
+    // log(1 + exp(-2a)) is below half an ulp of a for a >= 20.
+    // Quadrature at large order visits this region frequently.
+    if a >= 20.0 {
+        return a - core::f64::consts::LN_2;
+    }
     a + (-2.0 * a).exp().ln_1p() - core::f64::consts::LN_2
 }
 
@@ -127,6 +132,125 @@ fn reduced_order_k(v: f64, x: f64, scaled: bool) -> Option<f64> {
         return None;
     }
     Some(if scaled { result } else { result * (-x).exp() })
+}
+
+/// Positive saddle of the K integrand when v² > x. The derivative of its
+/// logarithm is g(t) = v tanh(vt) - x sinh(t). For t > 0, g(t)/t decreases
+/// strictly from v²-x to a negative value at asinh(v/x), giving one root.
+fn saddle_mode(v: f64, x: f64) -> f64 {
+    if v <= x.sqrt() {
+        return 0.0;
+    }
+    let mut high = (v / x).asinh();
+    // tanh(vt) rounds to one at this argument. The endpoint then agrees
+    // with the positive saddle to floating-point precision.
+    if v * high >= 32.0 {
+        return high;
+    }
+    let delta = v.mul_add(v, -x);
+    if delta <= 0.0 {
+        return 0.0;
+    }
+
+    // Avoid subtracting nearly equal values when the interior saddle
+    // emerges from t=0. This is g(t)/t and its derivative, using Taylor
+    // expansions valid for |vt|, |t| < 0.02; the omitted terms are below
+    // binary64 rounding in that region.
+    let residual = |t: f64| {
+        let vt = v * t;
+        if vt.abs() < 0.02 && t.abs() < 0.02 {
+            let y2 = vt * vt;
+            let t2 = t * t;
+            let tanh_correction = y2
+                * (1.0 / 3.0
+                    + y2 * (-2.0 / 15.0
+                        + y2 * (17.0 / 315.0 + y2 * (-62.0 / 2835.0 + y2 * 1382.0 / 155925.0))));
+            let sinh_correction =
+                t2 * (1.0 / 6.0 + t2 * (1.0 / 120.0 + t2 * (1.0 / 5040.0 + t2 / 362880.0)));
+            let tanh_derivative = v
+                * vt
+                * (2.0 / 3.0
+                    + y2 * (-8.0 / 15.0
+                        + y2 * (102.0 / 315.0 + y2 * (-496.0 / 2835.0 + y2 * 13820.0 / 155925.0))));
+            let sinh_derivative =
+                t * (1.0 / 3.0 + t2 * (1.0 / 30.0 + t2 * (1.0 / 840.0 + t2 / 45360.0)));
+            let squared_order = v * v;
+            (
+                delta - squared_order * tanh_correction - x * sinh_correction,
+                -squared_order * tanh_derivative - x * sinh_derivative,
+            )
+        } else {
+            let tanh = vt.tanh();
+            (
+                v * tanh - x * t.sinh(),
+                v * v * (1.0 - tanh * tanh) - x * t.cosh(),
+            )
+        }
+    };
+
+    // The known interval [0, asinh(v/x)] contains the positive saddle.
+    // Newton steps are accepted only if they stay inside that bracket;
+    // otherwise bisect it. Limit Newton to 16 iterations and retain a
+    // 60-step bisection fail-safe for difficult or nearly flat roots.
+    let mut low = 0.0;
+    let mut current = high;
+    if delta < 1e-3 * x {
+        let a = (v * v) * (v * v / 3.0) + x / 6.0;
+        let guess = (delta / a).sqrt();
+        if guess > low && guess < high {
+            current = guess;
+        }
+    }
+    for _ in 0..16 {
+        let (value, slope) = residual(current);
+        if value == 0.0 {
+            return current;
+        }
+        if !value.is_finite() || !slope.is_finite() {
+            break;
+        }
+        if value > 0.0 {
+            low = current;
+        } else {
+            high = current;
+        }
+        if high - low <= 4.0 * f64::EPSILON * high {
+            return low + 0.5 * (high - low);
+        }
+        let correction = if slope < 0.0 { value / slope } else { f64::NAN };
+        if correction.is_finite() && correction.abs() <= 4.0 * f64::EPSILON * current {
+            return current;
+        }
+        let proposal = current - correction;
+        let next = if proposal > low && proposal < high {
+            proposal
+        } else {
+            low + 0.5 * (high - low)
+        };
+        if next == current {
+            return current;
+        }
+        current = next;
+    }
+    for _ in 0..60 {
+        let middle = low + 0.5 * (high - low);
+        if middle == low || middle == high {
+            return middle;
+        }
+        let (value, _) = residual(middle);
+        if value == 0.0 {
+            return middle;
+        }
+        if value > 0.0 {
+            low = middle;
+        } else {
+            high = middle;
+        }
+        if high - low <= 4.0 * f64::EPSILON * high {
+            return low + 0.5 * (high - low);
+        }
+    }
+    low + 0.5 * (high - low)
 }
 
 /// Positive real K_v(x), with the optional exp(x) scaling.
@@ -279,21 +403,7 @@ pub(crate) fn kv(v: f64, x: f64, scaled: bool) -> f64 {
     // Find the maximum of -x(cosh(t)-1)+log(cosh(vt)). Its derivative
     // is v*tanh(vt)-x*sinh(t), with an interior maximum when v²>x.
     // Subtract its value before exponentiation to keep the quadrature scaled.
-    let mode = if v > x.sqrt() {
-        let mut low = 0.0;
-        let mut high = (v / x).asinh();
-        for _ in 0..60 {
-            let mid = low + (high - low) * 0.5;
-            if v * (v * mid).tanh() > x * mid.sinh() {
-                low = mid;
-            } else {
-                high = mid;
-            }
-        }
-        low + (high - low) * 0.5
-    } else {
-        0.0
-    };
+    let mode = saddle_mode(v, x);
     if !mode.is_finite() || mode >= 700.0 {
         return f64::INFINITY;
     }
@@ -305,33 +415,104 @@ pub(crate) fn kv(v: f64, x: f64, scaled: bool) -> f64 {
     }
 
     // Periodic trapezoid refinements converge rapidly for this smooth even
-    // integrand. The endpoint is placed deep in the decaying tail.
+    // integrand. The endpoint is placed deep in the decaying tail. Every
+    // refined grid contains all nodes of the previous grid, so retain their
+    // accumulated integral and evaluate only the new midpoint nodes.
     let integrand = |t: f64| (log_integrand(t) - peak).exp();
     let mut steps = 32_usize;
-    let mut previous = 0.0_f64;
-    let mut area;
+    let initial_h = end / steps as f64;
+    let mut sum = 0.5 * (integrand(0.0) + integrand(end));
+    for i in 1..steps {
+        sum += integrand(i as f64 * initial_h);
+    }
+    let mut area = sum * initial_h;
     loop {
-        let h = end / steps as f64;
-        let mut sum = 0.5 * (integrand(0.0) + integrand(end));
-        for i in 1..steps {
-            sum += integrand(i as f64 * h);
+        let refined_steps = steps * 2;
+        let h = end / refined_steps as f64;
+        let mut midpoint_sum = 0.0;
+        for i in 0..steps {
+            midpoint_sum += integrand((2 * i + 1) as f64 * h);
         }
-        area = sum * h;
-        if steps >= 128 && (area - previous).abs() <= 8.0 * f64::EPSILON * area {
+        let refined_area = 0.5 * area + midpoint_sum * h;
+        steps = refined_steps;
+        if steps >= 128 && (refined_area - area).abs() <= 8.0 * f64::EPSILON * refined_area {
+            area = refined_area;
             break;
         }
+        area = refined_area;
         if steps >= 8192 {
             break;
         }
-        previous = area;
-        steps *= 2;
     }
     (area.ln() + peak - if scaled { 0.0 } else { x }).exp()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::kv;
+    use super::{kv, log_cosh, saddle_mode};
+
+    #[test]
+    fn saddle_modes_match_high_precision_near_both_switches() {
+        // Reference positive roots of v*tanh(v*t) = x*sinh(t), computed
+        // independently with 105-digit Decimal exp, sinh, tanh and 280
+        // bisection iterations using the exact binary64 input values.
+        // Cases straddle v²=x and the v*asinh(v/x)=32 shortcut.
+        for (v, x, expected) in [
+            (20.0, 399.999_999_999_999_1, 4.126_952_385_024_223e-9),
+            (20.0, 399.999_999_999_767_17, 6.603_123_816_041_052e-8),
+            (20.0, 399.999_999_046_325_7, 4.225_999_248_301_342e-6),
+            (20.0, 399.96, 0.000_865_536_502_905_355_6),
+            (20.0, 400.0, 0.0),
+            (20.0, 400.000_000_953_674_3, 0.0),
+            (2.0, 3.999_999_99, 4.082_482_897_619_654e-5),
+            (0.5, 0.249_999_9, 0.001_264_911_232_740_387_4),
+            (35.25, 1_242.562_499_999_999, 1.329_092_202_813_063_4e-9),
+            (35.25, 1_242.562_499_046_325_7, 1.360_990_416_307_023_4e-6),
+            (35.25, 1242.52, 0.000_287_315_064_254_099_4),
+            (35.25, 1_242.562_5, 0.0),
+            (35.25, 400.0, 0.087_648_286_356_781_26),
+            (35.25, 33.968_432_725_882_57, 0.907_801_418_439_716_3),
+            (35.25, 33.968_432_725_9, 0.907_801_418_439_346_8),
+            (35.25, 33.968_432_725_8, 0.907_801_418_441_466_7),
+            (100.25, 705.0, 0.141_723_670_734_642_76),
+            (150.25, 10_000.0, 0.014_662_161_810_281_675),
+        ] {
+            let mode = saddle_mode(v, x);
+            assert!(
+                mode.is_finite() && (mode - expected).abs() <= 5e-12 * expected.abs().max(1e-16),
+                "saddle_mode({v},{x}) = {mode:.17e}, decimal reference {expected:.17e}"
+            );
+        }
+    }
+
+    #[test]
+    fn large_log_cosh_matches_direct_expression() {
+        for y in [20.0_f64, 32.0, 100.0, 1e6, 1e200] {
+            let a = y.abs();
+            let direct = a + (-2.0 * a).exp().ln_1p() - core::f64::consts::LN_2;
+            assert_eq!(log_cosh(y).to_bits(), direct.to_bits());
+            assert_eq!(log_cosh(-y).to_bits(), direct.to_bits());
+        }
+    }
+
+    #[test]
+    fn general_quadrature_matches_high_precision_with_and_without_saddle_shortcut() {
+        // Independently computed with mpmath at 75 decimal digits. The
+        // large-order cases hit the saddle shortcut, while (35.25,400)
+        // retains the bisection path.
+        for (v, x, expected) in [
+            (40.25, 30.0, 5_838_319_055.265_112),
+            (70.25, 1.0, 9.398_380_971_653_315e119),
+            (80.25, 80.0, 2_497_200_778_473_931.5),
+            (35.25, 400.0, 0.295_235_606_351_876_1),
+        ] {
+            let actual = kv(v, x, true);
+            assert!(
+                (actual / expected - 1.0).abs() < 2e-10,
+                "kve({v},{x})={actual:e}, mpmath={expected:e}"
+            );
+        }
+    }
 
     #[test]
     fn half_integer_closed_forms() {

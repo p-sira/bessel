@@ -1,21 +1,24 @@
 # Changelog
 
-## 0.1
+## 0.1.2
 
-### 0.1.1
+### Performance
 
-**Performance Improvements**
-- `itstruve0`: Restore the moderate-large-argument Chebyshev/Clenshaw fast path to avoid expensive quadrature ([#4](https://github.com/p-sira/bessel/pull/4)).
-- `kv`, `kve`: Extend the reduced-order K recurrence to well-conditioned orders below one, eliminating quadrature in common fractional-order cases ([#4](https://github.com/p-sira/bessel/pull/4)).
-- `hankel1`, `hankel2`, `hankel1e`, `hankel2e`: Evaluate the exact order-3/2 closed form for positive real arguments within a bounded range ([#4](https://github.com/p-sira/bessel/pull/4)).
-- `riccati_yn`: Evaluate the value and derivative sequences in a single O(n) upward recurrence instead of recomputing each order ([#4](https://github.com/p-sira/bessel/pull/4)).
+- Speed up `jnjnp_zeros` by avoiding unnecessary root searches ([#6](https://github.com/p-sira/bessel/pull/6)).
+- Reduce redundant computation in Kelvin functions, modified Bessel ratios and large-order K, spherical K derivatives, and Bessel integrals ([#6](https://github.com/p-sira/bessel/pull/6)).
+- Speed up real K evaluation, spherical J/I derivatives, and complex Bessel series and recurrences  ([#6](https://github.com/p-sira/bessel/pull/6)).
 
-**Tests**
-- Add independent high-precision reference grids for Struve transitions, small noninteger K orders, half-integer Hankel functions, and Riccati–Neumann sequences.
-- Verify behavior at algorithm boundaries and invalid inputs.
+## 0.1.1
 
-### 0.1.0
+### Performance
 
-**New Features**
-- Initial standalone extraction of real and complex Bessel, Hankel, Kelvin, Struve, spherical and Riccati–Bessel, and Airy functions from Sci.
-- Add checked APIs and independent numerical regression fixtures.
+- Speed up `itstruve0` for moderate to large arguments ([#4](https://github.com/p-sira/bessel/pull/4)).
+- Speed up `kv` and `kve` for well-conditioned fractional orders below one ([#4](https://github.com/p-sira/bessel/pull/4)).
+- Speed up `hankel1`, `hankel2`, `hankel1e`, and `hankel2e` at order 3/2 over a bounded range of positive real arguments ([#4](https://github.com/p-sira/bessel/pull/4)).
+- Compute `riccati_yn` values and derivatives together in O(n) time ([#4](https://github.com/p-sira/bessel/pull/4)).
+
+## 0.1.0
+
+### Added
+
+- Initial standalone release of Bessel, Hankel, Kelvin, Struve, spherical Bessel, Riccati–Bessel, and Airy functions extracted from Sci, including checked APIs.

@@ -118,6 +118,36 @@ mod cylindrical_real_order {
         sweep_order(bessel::kve)
     }
 
+    // Moderate-to-high fractional orders still use the stable real K
+    // quadrature. Include a narrow peak requiring many grid refinements.
+    #[divan::bench]
+    fn kve_fractional_quadrature() -> f64 {
+        [
+            (35.25, 400.0),
+            (75.25, 75.25),
+            (100.25, 705.0),
+            (150.25, 10_000.0),
+        ]
+        .iter()
+        .map(|&(v, x)| bessel::kve(black_box(v), black_box(x)))
+        .sum()
+    }
+
+    #[divan::bench]
+    fn kve_saddle_boundary() -> f64 {
+        // The saddle emerges continuously from zero as v² passes x.
+        // This also exercises the safeguarded Newton and shortcut switches.
+        [
+            (35.25, 1242.52),
+            (35.25, 1_242.562_499_046_325_7),
+            (35.25, 400.0),
+            (35.25, 33.968_432_725_9),
+        ]
+        .iter()
+        .map(|&(v, x)| bessel::kve(black_box(v), black_box(x)))
+        .sum()
+    }
+
     #[divan::bench]
     fn jv_f32() -> f32 {
         let mut acc = 0.0_f32;
@@ -212,6 +242,28 @@ mod complex_argument {
         sweep_complex(bessel::complex::hankel1)
     }
 
+    // One representative call per convergence or recurrence path changed by
+    // the complex-kernel optimization, for directly comparable CodSpeed data.
+    #[divan::bench]
+    fn jv_real_order_series() -> Complex64 {
+        bessel::complex::jv(black_box(3.25), black_box(Complex64::new(4.0, 2.0))).unwrap()
+    }
+
+    #[divan::bench]
+    fn yv_integer_second_series() -> Complex64 {
+        bessel::complex::yv(black_box(0.0), black_box(Complex64::new(0.1, 0.2))).unwrap()
+    }
+
+    #[divan::bench]
+    fn iv_large_order_miller() -> Complex64 {
+        bessel::complex::iv(black_box(65.0), black_box(Complex64::new(45.0, 5.0))).unwrap()
+    }
+
+    #[divan::bench]
+    fn kve_steed_cf2() -> Complex64 {
+        bessel::complex::kve(black_box(7.25), black_box(Complex64::new(10.0, 2.0))).unwrap()
+    }
+
     // The nearly imaginary K sector used to enter an oscillatory integral
     // with tens of thousands of expensive complex exponentials.
     #[divan::bench]
@@ -259,6 +311,22 @@ mod spherical {
     #[divan::bench]
     fn spherical_jn_derivative() -> f64 {
         sweep(|x| bessel::spherical_jn(5, x, true))
+    }
+
+    #[divan::bench(args = [5_i64, 50, 128])]
+    fn spherical_jn_derivative_orders(n: i64) -> f64 {
+        [0.75, 5.0, 25.0, 100.0, 256.0]
+            .iter()
+            .map(|&x| bessel::spherical_jn(black_box(n), black_box(x), true))
+            .sum()
+    }
+
+    #[divan::bench(args = [5_i64, 50, 128])]
+    fn spherical_in_derivative_orders(n: i64) -> f64 {
+        [0.75, 5.0, 25.0, 100.0]
+            .iter()
+            .map(|&x| bessel::spherical_in(black_box(n), black_box(x), true))
+            .sum()
     }
 
     #[divan::bench(args = [10, 100])]
@@ -328,7 +396,7 @@ mod zeros {
             .unwrap_or(0)
     }
 
-    #[divan::bench(args = [10, 64, 128])]
+    #[divan::bench(args = [1, 10, 64, 128])]
     fn jnjnp_zeros(nt: usize) -> usize {
         bessel::jnjnp_zeros(black_box(nt))
             .map(|z| z[0].len())

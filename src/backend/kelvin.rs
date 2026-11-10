@@ -42,7 +42,11 @@ fn small(x: f64) -> Kelvin<f64> {
         derivative *= q / (k * (k + 1.0));
         bep += derivative;
         weighted_derivative += derivative * (harmonic + 1.0 / (k + 1.0));
-        if term.norm() <= f64::EPSILON * be.norm() && derivative.norm() <= f64::EPSILON * bep.norm()
+        // In this small-argument series all four magnitudes stay bounded.
+        // Compare squared norms to avoid four square roots per iteration.
+        let tolerance_sq = f64::EPSILON * f64::EPSILON;
+        if term.norm_sqr() <= tolerance_sq * be.norm_sqr()
+            && derivative.norm_sqr() <= tolerance_sq * bep.norm_sqr()
         {
             break;
         }
@@ -107,8 +111,12 @@ fn first_kind_series(x: f64, need: Need) -> (Complex64, Complex64) {
         let mut slot = 1;
         loop {
             term *= t / (k * k);
-            sums[slot] += term;
-            derivative_sums[slot] += term * k;
+            if value {
+                sums[slot] += term;
+            }
+            if derivative {
+                derivative_sums[slot] += term * k;
+            }
             // Terms peak by k = 2 here, and the value and derivative have
             // moduli above 1 and 0.2, so an absolute tolerance suffices.
             if term * k <= 1e-18 {
@@ -118,11 +126,15 @@ fn first_kind_series(x: f64, need: Need) -> (Complex64, Complex64) {
             slot = (slot + 1) & 3;
         }
         return (
-            combine(sums),
-            Complex64::new(
-                (derivative_sums[0] - derivative_sums[2]) / half,
-                (derivative_sums[1] - derivative_sums[3]) / half,
-            ),
+            if value { combine(sums) } else { nan },
+            if derivative {
+                Complex64::new(
+                    (derivative_sums[0] - derivative_sums[2]) / half,
+                    (derivative_sums[1] - derivative_sums[3]) / half,
+                )
+            } else {
+                nan
+            },
         );
     }
     let (value_sum, derivative_sum) = match need {
@@ -617,4 +629,40 @@ pub fn kelvin_zeros<T: Float>(function: KelvinFunction, zeros: &mut [T]) -> Resu
         left = x + 3.5;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod component_series_tests {
+    use super::*;
+
+    #[test]
+    fn one_component_series_matches_combined_evaluation() {
+        // Exercise both the binary64 and double-double series, including
+        // their transition. A component-only call must retain its result.
+        for x in [0.5, 1.0, 4.0, 7.249, 7.25, 10.0, 19.999] {
+            let (value, derivative) = first_kind_series(x, Need::Both);
+            let (only_value, discarded_derivative) = first_kind_series(x, Need::Value);
+            let (discarded_value, only_derivative) = first_kind_series(x, Need::Derivative);
+            assert_eq!(value, only_value, "ber/bei at x={x}");
+            assert_eq!(derivative, only_derivative, "ber'/bei' at x={x}");
+            assert!(discarded_derivative.re.is_nan() && discarded_derivative.im.is_nan());
+            assert!(discarded_value.re.is_nan() && discarded_value.im.is_nan());
+        }
+    }
+
+    #[test]
+    fn small_series_components_match_combined_kelvin() {
+        for x in [1e-151, 1e-100, 0.001, 0.1, 0.499] {
+            let (be, ke, bep, kep) = small(x);
+            for (second, value, derivative) in [(false, be, bep), (true, ke, kep)] {
+                let (only_value, _) = pair_needed(x, second, false, Need::Value).unwrap();
+                let (_, only_derivative) = pair_needed(x, second, false, Need::Derivative).unwrap();
+                assert_eq!(value, only_value, "value at x={x}, second={second}");
+                assert_eq!(
+                    derivative, only_derivative,
+                    "derivative at x={x}, second={second}"
+                );
+            }
+        }
+    }
 }
