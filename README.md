@@ -1,19 +1,9 @@
 # bessel
 
-<p align="center">
-    <a href="LICENSE" style="text-decoration:none">
-        <img src="https://img.shields.io/badge/License-BSD--3--Clause-brightgreen.svg" alt="License">
-    </a>
-    <a href="https://crates.io/crates/bessel" style="text-decoration:none">
-        <img src="https://img.shields.io/crates/v/bessel" alt="Crate">
-    </a>
-    <a href="https://docs.rs/bessel" style="text-decoration:none">
-        <img src="https://img.shields.io/badge/Docs-docs.rs-blue" alt="Documentation">
-    </a>
-    <a href="https://app.codspeed.io/p-sira/bessel?utm_source=badge" style="text-decoration:none">
-        <img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed"/>
-    </a>
-</p>
+[![License](https://img.shields.io/badge/License-BSD--3--Clause-brightgreen.svg)](LICENSE)
+[![Crate](https://img.shields.io/crates/v/bessel)](https://crates.io/crates/bessel)
+[![Documentation](https://img.shields.io/badge/Docs-docs.rs-blue)](https://docs.rs/bessel)
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/p-sira/bessel?utm_source=badge)
 
 Pure Rust library for Bessel and related special functions, including cylindrical, spherical, Hankel, Kelvin, Struve, and Airy functions.
 
