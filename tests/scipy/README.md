@@ -12,6 +12,7 @@ uv run --script tests/scipy/generate_itstruve0_large.py
 uv run --script tests/scipy/generate_bessel_iv.py
 uv run --script tests/scipy/generate_tails.py
 uv run --script tests/fixtures/native_generate.py
+uv run --script tests/fixtures/accuracy_audit_generate.py
 ```
 
 The `families_inputs.csv` suite contains 1,192 input cases; real I/IE regressions
@@ -43,3 +44,6 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --no-deps
 ```
+
+The [numerical accuracy audit](../../docs/numerical-accuracy-audit.md) describes
+178 additional high-precision regressions and the broader sweep methodology.
